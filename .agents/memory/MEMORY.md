@@ -1,0 +1,3 @@
+- [Property, staff, and service rules](property-team-service-workflows.md) — keep ownership shares, role-based staff assignments, and company-vs-staff service delivery consistent.
+- [Conversation imports](conversation-project-import.md) — after a conversation move, check preserved files before rebuilding missing project source.
+- [Artifact-managed workflows](artifact-managed-workflows.md) — change service definitions through validated artifact metadata; managed workflows cannot be removed directly.

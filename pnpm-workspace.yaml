@@ -75,6 +75,11 @@ onlyBuiltDependencies:
   - unrs-resolver
 
 overrides:
+  # Security patch pins for vulnerable transitive dependencies.
+  "proxy-addr@2": "2.0.8"
+  "source-map-js@1": "1.2.2"
+  "brace-expansion@5": "5.0.12"
+  "fast-uri@3": "3.1.8"
   # replit uses linux-x64 only, we can exclude all other platforms
   "esbuild>@esbuild/darwin-arm64": "-"
   "esbuild>@esbuild/darwin-x64": "-"

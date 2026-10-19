@@ -87,6 +87,7 @@ const PROPERTY_SETUP_STEPS = [
   { title: 'Mapping', caption: 'Define the property layout' },
   { title: 'Ownership', caption: 'Assign owners and shares' },
   { title: 'Details', caption: 'Add facilities, units, and occupancy' },
+  { title: 'Review', caption: 'Confirm before saving' },
 ] as const;
 
 const PROPERTY_MAPPING_ERROR_KEYS = [
@@ -273,10 +274,41 @@ function SectionHeading({ eyebrow, title, description, index }: { eyebrow: strin
 
 function PropertyStepIntro({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return <div className="mb-5">
-    <p className="text-[9px] font-semibold uppercase tracking-[.14em] text-[#82948a]">{eyebrow}</p>
-    <h3 className="mt-1 text-[19px] font-semibold tracking-[-.03em] text-[#282722]">{title}</h3>
-    <p className="mt-1 text-[11px] leading-5 text-[#8d8981]">{description}</p>
+    <p className="text-[9px] font-semibold uppercase tracking-[.14em] text-[#a16a52]">{eyebrow}</p>
+    <h3 className="mt-1 text-[19px] font-semibold tracking-[-.03em] text-[#25221e]">{title}</h3>
+    <p className="mt-1 text-[11px] leading-5 text-[#89847c]">{description}</p>
   </div>;
+}
+
+function PropertyReviewCard({
+  title,
+  testId,
+  onEdit,
+  children,
+}: {
+  title: string;
+  testId: string;
+  onEdit: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section data-testid={testId} className="overflow-hidden rounded-[13px] border border-[#e9e6e1] bg-white">
+      <div className="flex items-center justify-between gap-3 border-b border-[#f0eeeb] bg-[#fbfaf8] px-4 py-3">
+        <h4 className="text-[11px] font-semibold text-[#403c35]">{title}</h4>
+        <button type="button" data-testid={`button-edit-${testId}`} onClick={onEdit} className="shrink-0 text-[10px] font-semibold text-[#965d45] hover:underline">Edit</button>
+      </div>
+      <div className="px-4 py-2">{children}</div>
+    </section>
+  );
+}
+
+function PropertyReviewDetail({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-[#f0eeeb] py-2 last:border-0">
+      <span className="text-[10px] font-semibold uppercase tracking-[.06em] text-[#aaa59d]">{label}</span>
+      <span className="max-w-[68%] whitespace-pre-wrap text-right text-[11px] leading-5 text-[#4d4942]">{value || 'Not provided'}</span>
+    </div>
+  );
 }
 
 function ContactFields({
@@ -993,6 +1025,79 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
     setStep((current) => Math.min(current + 1, PROPERTY_SETUP_STEPS.length - 1));
   };
   const canSave = Object.keys(validation).length === 0 && !saving;
+  const propertyCategoryLabel = PROPERTY_CATEGORIES.find((item) => item.value === category)?.label ?? 'Not selected';
+  const propertySubtypeLabel = category
+    ? PROPERTY_TYPES_BY_CATEGORY[category].find((item) => item.value === subtype)?.label ?? 'Not selected'
+    : 'Not selected';
+  const addressSummary = [
+    form.address_line1,
+    form.address_line2,
+    [form.city, form.state, form.postal_code].map((value) => String(value ?? '').trim()).filter(Boolean).join(', '),
+    form.country,
+  ].map((value) => String(value ?? '').trim()).filter(Boolean).join(' · ') || 'No address added';
+  const layoutSummary = [
+    singleFamily ? `${roomCount || '—'} rooms` : '',
+    (singleFamily || apartment || mixedUse) && floorCount ? `${floorCount} floors` : '',
+    unitMappedProperty ? `${form.units_count ?? '—'} units` : '',
+    mixedUse
+      ? MIXED_USE_COMPONENTS.filter((component) => mixedUseComponents.includes(component.value)).map((component) => component.label).join(', ')
+      : '',
+    officeBuilding && officeInBuilding !== null
+      ? officeInBuilding ? `Inside a building${officeFloor ? ` · floor ${officeFloor}` : ''}` : 'Standalone'
+      : '',
+    (retailCenter || hospitalitySpace) ? commercialSpaceType : '',
+    industrialBuildingSubtype && form.industrial_in_building !== null
+      ? form.industrial_in_building
+        ? `Inside a building${form.industrial_floor != null ? ` · floor ${form.industrial_floor}` : ''}`
+        : 'Standalone'
+      : '',
+  ].filter(Boolean).join(' · ') || 'No additional layout details';
+  const ownershipSummary = singleFamily || unitMappedProperty || commercial || industrial || mixedUse
+    ? owners.map((owner, index) => {
+      const selectedContact = contacts.find((contact) => String(contact.id) === owner.contact_id);
+      const name = owner.source === 'existing' ? selectedContact?.name ?? owner.name : owner.name;
+      const share = unitMappedProperty
+        ? owners.length === 1 ? 'All units' : summarizeOwnerUnits(ownerAssignmentKey(owner, index)) || 'No units assigned'
+        : `${owner.ownership_percentage || '—'}%`;
+      const scope = mixedUse && owners.length > 1
+        ? ` · ${MIXED_USE_COMPONENTS.filter((component) => mixedUseOwnershipScopeValues(owner.ownership_scope).includes(component.value)).map((component) => component.label).join(', ') || 'No uses assigned'}`
+        : '';
+      return `${name.trim() || `Owner ${index + 1}`} · ${share}${scope}`;
+    }).join('\n')
+    : 'Not required for this property type';
+  const selectedFacilitySummary = [
+    ...propertyFacilities.map((value) => sharedFacilityOptions.find((option) => option.value === value)?.label ?? value),
+    ...customFacilities,
+  ].join(', ') || 'No facilities selected';
+  const industrialOperationsSummary = [
+    ...(warehouse ? form.warehouse_goods ?? [] : []),
+    ...(distributionCenter ? form.distribution_goods ?? [] : []),
+    ...(manufacturingPlant ? form.manufactured_products ?? [] : []),
+    ...(researchFacility ? form.research_focus ?? [] : []),
+  ].join(', ') || 'No operational details';
+  const renterName = renter.source === 'existing'
+    ? contacts.find((contact) => String(contact.id) === renter.contact_id)?.name ?? renter.name
+    : renter.name;
+  const occupancySummary = !propertyCanRent
+    ? 'Not applicable'
+    : rented === false
+      ? 'Not rented'
+      : rented
+        ? [
+          renterName.trim() || 'Renter not set',
+          renter.monthly_rent ? `$${renter.monthly_rent} / month` : 'Rent not set',
+          renter.lease_term_type === 'fixed'
+            ? [renter.lease_start_date, renter.lease_end_date].filter(Boolean).join(' – ') || 'Lease dates not set'
+            : 'Until termination',
+        ].join(' · ')
+        : 'Not decided';
+  const unitRecordsSummary = mixedUse
+    ? `${inlineUnitRecords.length} of ${mixedUsePlannedSpaces} planned spaces added`
+    : unitMappedProperty
+      ? property
+        ? `${existingUnits.filter((unit) => unit.property_id === property.id).length} unit records on file`
+        : `${inlineUnitRecords.length} of ${configuredUnits || '—'} units added`
+      : 'Not applicable';
   const save = async () => {
     if (!canSave) return;
     setSaving(true);
@@ -1069,27 +1174,27 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
   };
 
   return (
-    <div data-testid="property-setup-form" className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6">
-      <motion.button type="button" aria-label="Close property setup" data-testid="button-property-setup-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={saving ? undefined : onClose} className="absolute inset-0 cursor-default bg-[#171a17]/35 backdrop-blur-[3px]" />
-      <motion.section role="dialog" aria-modal="true" aria-labelledby="property-setup-title" initial={{ opacity: 0, y: 12, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="relative flex max-h-[94dvh] w-full max-w-[760px] flex-col overflow-hidden rounded-[17px] border border-[#e6e3dd] bg-[#fbfaf8] shadow-[0_28px_90px_rgba(29,31,27,.2)]">
-        <header className="flex shrink-0 items-start justify-between border-b border-[#e9e6e0] px-5 py-4 sm:px-7 sm:py-5">
+      <div data-testid="property-setup-form" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <motion.button type="button" aria-label="Close property setup" data-testid="button-property-setup-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={saving ? undefined : onClose} className="absolute inset-0 cursor-default bg-[#171511]/30 backdrop-blur-[2px]" />
+      <motion.section role="dialog" aria-modal="true" aria-labelledby="property-setup-title" initial={{ opacity: 0, y: 10, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} className="relative flex max-h-[92dvh] w-full max-w-[780px] flex-col overflow-hidden rounded-[16px] border border-[#e4e2de] bg-[#fbfaf8] shadow-[0_24px_80px_rgba(25,22,18,.18)]">
+        <header className="flex shrink-0 items-start justify-between border-b border-[#ebe8e3] px-5 py-4 sm:px-7">
           <div className="flex items-start gap-3.5">
-            <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-[11px] bg-[#eaf0e9] text-[#55776b]"><Building2 size={17} /></div>
-            <div><p className="text-[9px] font-semibold uppercase tracking-[.18em] text-[#82948a]">Property setup</p><h2 id="property-setup-title" data-testid="text-property-form-title" className="mt-0.5 text-[17px] font-semibold tracking-[-.035em] text-[#282722]">{property ? 'Update property' : 'Add a property'}</h2><p className="mt-1 text-[11px] text-[#8d8981]">Start with the essentials. We’ll tailor the setup to this property.</p></div>
+            <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-[11px] bg-[#f3ebe5] text-[#a96d53]"><Building2 size={17} /></div>
+            <div><p className="text-[9px] font-semibold uppercase tracking-[.14em] text-[#a16a52]">Property setup</p><h2 id="property-setup-title" data-testid="text-property-form-title" className="mt-1 text-[16px] font-semibold tracking-[-.02em] text-[#201e1a]">{property ? 'Edit property' : 'Add a property'}</h2><p className="mt-1 max-w-[580px] text-[11px] leading-5 text-[#89847c]">Build a clear operating record for your property and team.</p></div>
           </div>
-          <button type="button" data-testid="button-close-property-setup" aria-label="Close form" onClick={onClose} disabled={saving} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#e5e2dc] text-[#817d75] transition-colors hover:bg-[#f0eeea] hover:text-[#383630] disabled:opacity-50"><X size={15} /></button>
+          <button type="button" data-testid="button-close-property-setup" aria-label="Close form" onClick={onClose} disabled={saving} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[#e4e2de] text-[#817d76] hover:bg-[#f0eeea] disabled:opacity-50"><X size={14} /></button>
         </header>
 
         <div className="shrink-0 border-b border-[#ebe8e3] bg-[#f7f5f1] px-5 py-4 sm:px-7">
           <div className="mb-3 flex items-center justify-between gap-3">
             <p className="text-[11px] font-semibold text-[#46423b]">Step {step + 1} <span className="font-normal text-[#969188]">of {PROPERTY_SETUP_STEPS.length}</span></p>
-            <p className="text-right text-[10px] text-[#89847c]">{PROPERTY_SETUP_STEPS[step].caption}</p>
+            <p className="text-right text-[10px] text-[#89847c]">{PROPERTY_SETUP_STEPS[step]?.caption}</p>
           </div>
-          <div className="grid grid-cols-5 gap-2" role="list" aria-label="Property setup progress">
+          <div className="grid grid-cols-6 gap-2" role="list" aria-label="Property setup progress">
             {PROPERTY_SETUP_STEPS.map((item, index) => (
               <div key={item.title} role="listitem" aria-current={step === index ? 'step' : undefined}>
-                <div className={`h-[3px] rounded-full ${index <= step ? 'bg-[#55776b]' : 'bg-[#dfdcd5]'}`} />
-                <p className={`mt-2 text-[9px] font-semibold uppercase tracking-[.08em] ${index === step ? 'text-[#455f53]' : index < step ? 'text-[#68645c]' : 'text-[#a8a39b]'}`}>{item.title}</p>
+                <div className={`h-[3px] rounded-full ${index <= step ? 'bg-[#a96d53]' : 'bg-[#dfdcd5]'}`} />
+                <p className={`mt-2 text-[8px] font-semibold uppercase tracking-[.06em] sm:text-[9px] sm:tracking-[.08em] ${index === step ? 'text-[#8f563e]' : index < step ? 'text-[#68645c]' : 'text-[#a8a39b]'}`}>{item.title}</p>
               </div>
             ))}
           </div>
@@ -1449,7 +1554,37 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
                   </section>
                 )}
                 {!residential && !commercial && !industrial && <div data-testid="text-property-basic-setup" className="rounded-[10px] border border-[#e7e4de] bg-white px-4 py-3 text-[11px] leading-5 text-[#817d75]">The location and property classification are ready. Additional setup for this property type will be available in a later step.</div>}
-                  </motion.div>
+                {step === 5 && (
+                  <section data-testid="section-property-review">
+                    <PropertyStepIntro
+                      eyebrow="06 · Final review"
+                      title="Review the property setup"
+                      description="Confirm the property details before saving. Use Edit to return to any step."
+                    />
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <PropertyReviewCard title="Property identity" testId="property-review-identity" onEdit={() => { setSaveError(''); setStep(0); }}>
+                        <PropertyReviewDetail label="Name" value={form.name.trim()} />
+                        <PropertyReviewDetail label="Type" value={`${propertyCategoryLabel} · ${propertySubtypeLabel}`} />
+                      </PropertyReviewCard>
+                      <PropertyReviewCard title="Location" testId="property-review-location" onEdit={() => { setSaveError(''); setStep(1); }}>
+                        <PropertyReviewDetail label="Address" value={addressSummary} />
+                      </PropertyReviewCard>
+                      <PropertyReviewCard title="Property mapping" testId="property-review-mapping" onEdit={() => { setSaveError(''); setStep(2); }}>
+                        <PropertyReviewDetail label="Layout" value={layoutSummary} />
+                      </PropertyReviewCard>
+                      <PropertyReviewCard title="Ownership" testId="property-review-ownership" onEdit={() => { setSaveError(''); setStep(3); }}>
+                        <PropertyReviewDetail label="Owners" value={ownershipSummary} />
+                      </PropertyReviewCard>
+                      <PropertyReviewCard title="Facilities & occupancy" testId="property-review-details" onEdit={() => { setSaveError(''); setStep(4); }}>
+                        <PropertyReviewDetail label="Facilities" value={selectedFacilitySummary} />
+                        {industrial && <PropertyReviewDetail label="Operations" value={industrialOperationsSummary} />}
+                        <PropertyReviewDetail label="Occupancy" value={occupancySummary} />
+                        <PropertyReviewDetail label="Unit records" value={unitRecordsSummary} />
+                      </PropertyReviewCard>
+                    </div>
+                  </section>
+                )}
+              </motion.div>
                 </AnimatePresence>
               )}
             </motion.div>
@@ -1458,13 +1593,13 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
           {saveError && <div data-testid="error-property-save" role="alert" className="mt-5 flex items-start gap-2 rounded-[9px] border border-[#efd2ce] bg-[#fff7f5] px-3.5 py-3 text-[11px] leading-4 text-[#a33e34]"><AlertCircle size={14} className="mt-0.5 shrink-0" />{saveError}</div>}
         </div>
 
-        <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-[#e9e6e0] bg-[#faf9f6] px-5 py-3.5 sm:px-7">
+        <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-[#ebe8e3] bg-[#fbfaf8] px-5 py-4 sm:px-7">
           <button type="button" data-testid="button-property-step-back" onClick={() => { setSaveError(''); setStep((current) => Math.max(current - 1, 0)); }} disabled={step === 0 || saving} className="flex h-9 items-center gap-2 rounded-[9px] border border-[#e4e2de] px-3 text-[11px] font-semibold text-[#625e57] hover:bg-[#f0eeea] disabled:cursor-not-allowed disabled:opacity-40"><ArrowLeft size={13} />Back</button>
           <div className="flex items-center gap-2">
             <button type="button" data-testid="button-cancel-property-setup" onClick={onClose} disabled={saving} className="hidden h-9 rounded-[9px] px-3 text-[11px] font-medium text-[#77736d] hover:bg-[#f0eeea] disabled:opacity-50 sm:block">Cancel</button>
             {step < PROPERTY_SETUP_STEPS.length - 1
-              ? <button type="button" data-testid="button-property-step-continue" onClick={continueStep} disabled={saving} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#55776b] px-4 text-[11px] font-semibold text-white shadow-[0_2px_5px_rgba(47,67,54,.12)] hover:bg-[#456357] disabled:opacity-50">Continue<ChevronRight size={13} /></button>
-              : <button type="button" data-testid="button-save-property-setup" onClick={save} disabled={!canSave} title={!canSave && Object.keys(validation).length ? 'Complete the required fields to continue' : undefined} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#55776b] px-4 text-[11px] font-semibold text-white shadow-[0_2px_5px_rgba(47,67,54,.12)] hover:bg-[#456357] disabled:cursor-not-allowed disabled:opacity-50">{saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCheck size={13} />}{saving ? 'Saving property' : property ? 'Save changes' : 'Create property'}</button>}
+              ? <button type="button" data-testid="button-property-step-continue" onClick={continueStep} disabled={saving} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#a96d53] px-4 text-[11px] font-semibold text-white shadow-[0_2px_5px_rgba(92,54,37,.12)] hover:bg-[#925a43] disabled:opacity-50">Continue<ChevronRight size={13} /></button>
+              : <button type="button" data-testid="button-save-property-setup" onClick={save} disabled={!canSave} title={!canSave && Object.keys(validation).length ? 'Complete the required fields to continue' : undefined} className="flex h-9 items-center gap-2 rounded-[9px] bg-[#a96d53] px-4 text-[11px] font-semibold text-white shadow-[0_2px_5px_rgba(92,54,37,.12)] hover:bg-[#925a43] disabled:cursor-not-allowed disabled:opacity-50">{saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCheck size={13} />}{saving ? 'Saving property' : property ? 'Save changes' : 'Create property'}</button>}
           </div>
         </footer>
       </motion.section>

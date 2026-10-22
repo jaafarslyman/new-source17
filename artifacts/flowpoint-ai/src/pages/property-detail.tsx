@@ -15,6 +15,7 @@ import {
   propertyAddress,
   propertyCategoryLabel,
   propertyTypeLabel,
+  occupancyStatusLabel,
   RETAIL_CENTER_TYPES,
   mixedUseFloorPlanSummary,
   supportsPropertyRental,
@@ -468,7 +469,7 @@ export default function PropertyDetailPage() {
            {supportsPropertyRental(property.property_type) && <section data-testid="section-property-rental-summary" className="mt-4 rounded-[14px] border border-[#e9e6e1] bg-white p-5">
              <div className="mb-3"><h2 className="text-[13px] font-semibold text-[#302d28]">Occupancy & lease</h2><p className="mt-1 text-[11px] text-[#9a958d]">Rental information entered for this property.</p></div>
              <div className="grid gap-x-7 sm:grid-cols-2">
-               <InfoRow label="Rental status" value={property.is_rented === null ? null : property.is_rented ? 'Rented' : 'Not rented'} />
+               <InfoRow label="Occupancy status" value={occupancyStatusLabel(property.occupancy_status ?? (property.is_rented ? 'rented' : 'vacant'))} />
                <InfoRow label="Renter" value={property.is_rented ? propertyRenterName : null} />
                <InfoRow label="Monthly rent (USD)" value={property.is_rented ? formatMoney(property.monthly_rent) : null} />
                <InfoRow label="Lease duration" value={property.is_rented ? property.lease_term_type === 'until_termination' ? 'Until termination' : property.lease_term_type === 'fixed' ? 'Fixed term' : null : null} />

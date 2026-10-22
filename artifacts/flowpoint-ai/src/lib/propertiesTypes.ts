@@ -85,6 +85,7 @@ export interface Property {
   facilities: string[] | null;
   custom_facilities: string[] | null;
   is_rented: boolean | null;
+  occupancy_status: OccupancyStatus | null;
   monthly_rent: number | null;
   lease_term_type: 'fixed' | 'until_termination' | null;
   lease_start_date: string | null;
@@ -114,6 +115,13 @@ export interface Property {
 }
 
 export type PropertyDraft = Omit<Property, 'id' | 'company_id' | 'created_at' | 'updated_at'>;
+export type OccupancyStatus = 'rented' | 'owner_occupied' | 'vacant';
+
+export function occupancyStatusLabel(status: OccupancyStatus | null | undefined) {
+  if (status === 'rented') return 'Rented';
+  if (status === 'owner_occupied') return 'Occupied by owner';
+  return 'Not rented';
+}
 
 export const PROPERTY_CATEGORIES = [
   { value: 'residential', label: 'Residential' },
@@ -548,6 +556,7 @@ export const blankProperty: PropertyDraft = {
   facilities: [],
   custom_facilities: [],
   is_rented: false,
+  occupancy_status: 'vacant',
   monthly_rent: null,
   lease_term_type: null,
   lease_start_date: null,

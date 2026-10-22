@@ -15,7 +15,9 @@ import {
   RETAIL_UNIT_TYPES,
   WAREHOUSE_FACILITIES,
   MIXED_USE_SPACE_MAPPING_SCOPE,
+  occupancyStatusLabel,
   propertyTypeLabel,
+  type OccupancyStatus,
   type Property,
 } from '@/lib/propertiesTypes';
 import {
@@ -305,6 +307,7 @@ function UnitForm({
     lease_end_date: unit?.lease_end_date ?? null,
     lease_term_type: unit?.lease_term_type ?? null,
     status: unit?.status ?? 'vacant',
+    occupancy_status: unit?.occupancy_status ?? (unit?.status === 'occupied' ? 'rented' : 'vacant'),
     amenities: unit?.amenities ?? '',
     facilities: unit?.facilities ?? [],
     custom_facilities: unit?.custom_facilities ?? [],
@@ -330,7 +333,9 @@ function UnitForm({
     return [blankOwner()];
   });
   const [renter, setRenter] = useState<PropertyRenterDraft>(() => relationshipRenterDraft(activeTenant, contacts.find((contact) => String(contact.id) === String(activeTenant?.contact_id)), unit));
-  const [rented, setRented] = useState(unit?.status === 'occupied');
+  const [occupancyStatus, setOccupancyStatus] = useState<OccupancyStatus>(
+    unit?.occupancy_status ?? (unit?.status === 'occupied' ? 'rented' : 'vacant'),
+  );
   const [customFacility, setCustomFacility] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -518,7 +523,7 @@ function UnitForm({
     if (apartmentBuilding && !hasLockedUnitOwners) next.inherited_owner = propertyOwners.length > 1
       ? 'This unit number must match exactly one building owner’s unit scope.'
       : 'Add a building owner before adding apartment units.';
-    if (rented) {
+    if (occupancyStatus === 'rented') {
       if (renter.source === 'existing' && !renter.contact_id) next.renter = 'Select the renter contact.';
       if (renter.source === 'new' && !renter.name.trim()) next.renter = 'Renter name is required.';
       if (renter.source === 'new' && !renter.email.trim() && !renter.phone.trim()) next.renter = 'Add an email or phone number.';
@@ -553,11 +558,12 @@ function UnitForm({
       bathrooms: mixedUse && draft.unit_type !== 'apartment' ? null : draft.bathrooms,
       facilities: (draft.facilities ?? []).filter((facility) => unitFacilityOptions.some((option) => option.value === facility)),
       custom_facilities: (draft.custom_facilities ?? []).filter(Boolean),
-      status: rented ? 'occupied' : 'vacant',
-      monthly_rent: rented ? Number(renter.monthly_rent) : null,
-      lease_term_type: rented ? renter.lease_term_type : null,
-      lease_start_date: rented ? renter.lease_start_date : null,
-      lease_end_date: rented && renter.lease_term_type === 'fixed' ? renter.lease_end_date : null,
+      status: occupancyStatus === 'vacant' ? 'vacant' : 'occupied',
+      occupancy_status: occupancyStatus,
+      monthly_rent: occupancyStatus === 'rented' ? Number(renter.monthly_rent) : null,
+      lease_term_type: occupancyStatus === 'rented' ? renter.lease_term_type : null,
+      lease_start_date: occupancyStatus === 'rented' ? renter.lease_start_date : null,
+      lease_end_date: occupancyStatus === 'rented' && renter.lease_term_type === 'fixed' ? renter.lease_end_date : null,
       security_deposit: null,
       rent_due_day: 1,
     };
@@ -569,7 +575,7 @@ function UnitForm({
        ownership_percentage: owner.ownership_percentage.trim(),
       ownership_scope: mixedUse ? 'Entire space' : unitMappedProperty ? owner.ownership_scope || (owners.length === 1 ? 'Entire unit' : '') : '',
     })) : [];
-    const renterRow = rented ? {
+    const renterRow = occupancyStatus === 'rented' ? {
       ...renter,
       name: renter.name.trim(),
       email: renter.email.trim(),
@@ -685,11 +691,15 @@ function UnitForm({
         </section>
 
         <section className="border-t border-[#ebe8e2] pt-5" data-testid="section-unit-rental">
-          <div className="mb-3"><p className="text-[12px] font-semibold text-[#35332e]">Rental status</p><p className="mt-1 text-[10px] text-[#938f86]">A unit can have only one active renter.</p></div>
-          <div className="grid grid-cols-2 gap-2">
-            {[{ value: false, label: 'Not rented' }, { value: true, label: 'Rented' }].map((choice) => <button key={String(choice.value)} type="button" data-testid={`button-unit-rented-${choice.value ? 'yes' : 'no'}`} aria-pressed={rented === choice.value} onClick={() => setRented(choice.value)} className={`rounded-[9px] border p-2.5 text-left text-[11px] font-semibold ${rented === choice.value ? 'border-[#97ad9b] bg-[#eff4ee] text-[#455c4b]' : 'border-[#e7e4de] bg-white text-[#6f6b63]'}`}>{choice.label}</button>)}
+          <div className="mb-3"><p className="text-[12px] font-semibold text-[#35332e]">Occupancy status</p><p className="mt-1 text-[10px] text-[#938f86]">Choose whether this unit is rented, occupied by its owner, or vacant.</p></div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {[
+              { value: 'rented' as const, label: 'Rented', testId: 'yes' },
+              { value: 'owner_occupied' as const, label: 'Occupied by owner', testId: 'owner' },
+              { value: 'vacant' as const, label: 'Not rented', testId: 'no' },
+            ].map((choice) => <button key={choice.value} type="button" data-testid={`button-unit-rented-${choice.testId}`} aria-pressed={occupancyStatus === choice.value} onClick={() => setOccupancyStatus(choice.value)} className={`rounded-[9px] border p-2.5 text-left text-[11px] font-semibold ${occupancyStatus === choice.value ? 'border-[#97ad9b] bg-[#eff4ee] text-[#455c4b]' : 'border-[#e7e4de] bg-white text-[#6f6b63]'}`}>{choice.label}</button>)}
           </div>
-          {rented && <div className="mt-3 rounded-[10px] border border-[#e7e4de] bg-white p-3">
+          {occupancyStatus === 'rented' && <div className="mt-3 rounded-[10px] border border-[#e7e4de] bg-white p-3">
             <ContactEditor row={renter} index={0} kind="renter" contacts={contacts} onChange={(patch) => changeRenter(patch as Partial<PropertyRenterDraft>)} />
             <FormError message={errors.renter} />
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -800,16 +810,17 @@ export default function PropertyUnitManager({
       {atCapacity && mixedUseCapacity > 0 && <p data-testid={`text-property-unit-capacity-${property.id}`} className="mt-2 text-[10px] text-[#8c887f]">The configured unit capacity has been reached.</p>}
       {feedback && <p className="mt-2 text-[10px] text-[#a33e34]">{feedback}</p>}
       {propertyUnits.length === 0 ? <div className="mt-3 rounded-[9px] border border-dashed border-[#e4e1da] px-3 py-4 text-center text-[10px] text-[#99948b]">No units added yet.</div> : <div className="mt-3 space-y-2">
-        {propertyUnits.map((unit) => {
+          {propertyUnits.map((unit) => {
           const tenant = relationships.find((item) => item.unit_id === unit.id && item.relationship_type === 'tenant');
           const tenantName = contacts.find((contact) => String(contact.id) === String(tenant?.contact_id))?.name;
+            const unitOccupancy = unit.occupancy_status ?? (unit.status === 'occupied' ? 'rented' : 'vacant');
           const facilitySummary = [...(unit.facilities ?? []), ...(unit.custom_facilities ?? [])].slice(0, 3).join(', ');
           const floorLabel = unit.floor === null ? null : unit.floor === 0 ? 'Ground floor' : `Floor ${unit.floor}`;
           const commercialSubtypeLabel = unit.commercial_space_type
             ? [...RETAIL_UNIT_TYPES, ...HOSPITALITY_SPACE_TYPES].find((option) => option.value === unit.commercial_space_type)?.label ?? unit.commercial_space_type
             : null;
           return <article key={unit.id} data-testid={`row-property-unit-${unit.id}`} className="flex items-center justify-between gap-3 rounded-[9px] border border-[#eeece7] bg-[#fdfdfc] px-3 py-2.5">
-            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-[11px] font-semibold text-[#37342f]">{unit.unit_number}</p>{property.property_type === 'mixed_use_development' && <span className="rounded-full bg-[#f1f0ec] px-2 py-0.5 text-[9px] font-medium text-[#77736d]">{unitTypeLabel(unit.unit_type)}</span>}{commercialSubtypeLabel && <span className="rounded-full bg-[#f6f4ef] px-2 py-0.5 text-[9px] font-medium text-[#77736d]">{commercialSubtypeLabel}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-semibold ${unit.status === 'occupied' ? 'bg-[#edf7ef] text-[#327443]' : 'bg-[#eef5fb] text-[#39709c]'}`}>{unit.status === 'occupied' ? 'Rented' : 'Not rented'}</span>{floorLabel && <span className="text-[9px] text-[#8d8981]">{floorLabel}</span>}</div><p className="mt-1 truncate text-[9px] text-[#928d84]">{tenantName ? `Renter: ${tenantName}` : unit.room_count ? `${unit.room_count} rooms` : 'No renter'}{unit.monthly_rent ? ` · ${formatMoney(unit.monthly_rent)}/mo` : ''}{facilitySummary ? ` · ${facilitySummary}` : ''}</p></div>
+            <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-[11px] font-semibold text-[#37342f]">{unit.unit_number}</p>{property.property_type === 'mixed_use_development' && <span className="rounded-full bg-[#f1f0ec] px-2 py-0.5 text-[9px] font-medium text-[#77736d]">{unitTypeLabel(unit.unit_type)}</span>}{commercialSubtypeLabel && <span className="rounded-full bg-[#f6f4ef] px-2 py-0.5 text-[9px] font-medium text-[#77736d]">{commercialSubtypeLabel}</span>}<span className={`rounded-full px-2 py-0.5 text-[9px] font-semibold ${unitOccupancy !== 'vacant' ? 'bg-[#edf7ef] text-[#327443]' : 'bg-[#eef5fb] text-[#39709c]'}`}>{occupancyStatusLabel(unitOccupancy)}</span>{floorLabel && <span className="text-[9px] text-[#8d8981]">{floorLabel}</span>}</div><p className="mt-1 truncate text-[9px] text-[#928d84]">{tenantName ? `Renter: ${tenantName}` : unitOccupancy === 'owner_occupied' ? 'Occupied by owner' : unit.room_count ? `${unit.room_count} rooms` : 'No renter'}{unit.monthly_rent ? ` · ${formatMoney(unit.monthly_rent)}/mo` : ''}{facilitySummary ? ` · ${facilitySummary}` : ''}</p></div>
             <div className="flex shrink-0 gap-1"><button type="button" aria-label={`Edit unit ${unit.unit_number}`} data-testid={`button-edit-unit-${unit.id}`} onClick={() => { setFeedback(''); setFormUnit(unit); }} className="flex h-7 w-7 items-center justify-center rounded-[7px] border border-[#e6e3dd] text-[#77736d] hover:bg-[#f2f0ec]"><Pencil size={11} /></button><button type="button" aria-label={`Delete unit ${unit.unit_number}`} data-testid={`button-delete-unit-${unit.id}`} onClick={() => setDeleteUnit(unit)} className="flex h-7 w-7 items-center justify-center rounded-[7px] border border-[#efd0cc] text-[#a33e34] hover:bg-[#fff2f0]"><Trash2 size={11} /></button></div>
           </article>;
         })}

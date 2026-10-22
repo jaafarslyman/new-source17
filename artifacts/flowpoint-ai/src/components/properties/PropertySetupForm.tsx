@@ -34,6 +34,7 @@ import {
   WAREHOUSE_GOODS,
   type Property,
   type PropertyDraft,
+  type OccupancyStatus,
   WAREHOUSE_FACILITIES,
   supportsPropertyRental,
 } from '@/lib/propertiesTypes';
@@ -381,7 +382,7 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
   const [owners, setOwners] = useState<OwnerDraft[]>([blankOwner()]);
   const [mixedUseOwnershipMode, setMixedUseOwnershipMode] = useState<'percentage' | 'space'>('percentage');
   const [unitOwnerAssignments, setUnitOwnerAssignments] = useState<UnitOwnerAssignmentDraft[]>([]);
-  const [rented, setRented] = useState<boolean | null>(null);
+  const [occupancyStatus, setOccupancyStatus] = useState<OccupancyStatus | null>(null);
   const [renter, setRenter] = useState<PropertyRenterDraft>(blankRenter());
   const [pendingUnits, setPendingUnits] = useState<UnitSavePayload[]>([]);
   const [unitEditorOpen, setUnitEditorOpen] = useState(false);
@@ -478,7 +479,7 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
         ownership_percentage: '',
       })));
     setUnitOwnerAssignments(savedUnitMap.length ? savedUnitMap : legacyScopeMap);
-    setRented(property?.is_rented ?? null);
+    setOccupancyStatus(property?.occupancy_status ?? (property?.is_rented ? 'rented' : property ? 'vacant' : null));
     setRenter({
       ...blankRenter(),
       ...(initialRenter ?? {}),
@@ -650,12 +651,13 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
     commercial_space_type: retailCenter || hospitalitySpace ? commercialSpaceType || null : null,
     mixed_use_components: mixedUse ? mixedUseComponents : [],
     mixed_use_floor_plan: mixedUse ? normalizedMixedUseFloorPlan(mixedUseFloorPlan, mixedUseComponents) : [],
-    is_rented: propertyCanRent ? Boolean(rented) : false,
-    monthly_rent: propertyCanRent && rented ? Number(renter.monthly_rent) || null : null,
-    lease_term_type: propertyCanRent && rented ? renter.lease_term_type : null,
-    lease_start_date: propertyCanRent && rented ? renter.lease_start_date || null : null,
-    lease_end_date: propertyCanRent && rented && renter.lease_term_type === 'fixed' ? renter.lease_end_date || null : null,
-  }), [property, form, category, subtype, multifamily, apartment, singleFamily, officeBuilding, officeInBuilding, officeFloor, retailCenter, hospitalitySpace, commercialSpaceType, mixedUse, mixedUseComponents, mixedUseFloorPlan, propertyCanRent, floorCount, floorCapacities, roomCount, propertyFacilities, customFacilities, rented, renter, unitOwnershipMap]);
+    is_rented: propertyCanRent ? occupancyStatus === 'rented' : false,
+    occupancy_status: propertyCanRent ? occupancyStatus ?? 'vacant' : 'vacant',
+    monthly_rent: propertyCanRent && occupancyStatus === 'rented' ? Number(renter.monthly_rent) || null : null,
+    lease_term_type: propertyCanRent && occupancyStatus === 'rented' ? renter.lease_term_type : null,
+    lease_start_date: propertyCanRent && occupancyStatus === 'rented' ? renter.lease_start_date || null : null,
+    lease_end_date: propertyCanRent && occupancyStatus === 'rented' && renter.lease_term_type === 'fixed' ? renter.lease_end_date || null : null,
+  }), [property, form, category, subtype, multifamily, apartment, singleFamily, officeBuilding, officeInBuilding, officeFloor, retailCenter, hospitalitySpace, commercialSpaceType, mixedUse, mixedUseComponents, mixedUseFloorPlan, propertyCanRent, floorCount, floorCapacities, roomCount, propertyFacilities, customFacilities, occupancyStatus, renter, unitOwnershipMap]);
   const inlineOwnerData = useMemo(() => {
     const syntheticContacts: Contact[] = [];
     const relations: ContactPropertyRelationship[] = [];
@@ -1005,8 +1007,8 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
         if (Math.abs(sum - 100) > 0.001) next.owner_total = `Ownership percentages must total 100% (currently ${sum}%).`;
       }
     }
-    if (propertyCanRent && rented === null) next.rented = `Choose whether this ${singleFamily ? 'home' : 'property'} is rented.`;
-    if (propertyCanRent && rented) {
+    if (propertyCanRent && occupancyStatus === null) next.rented = `Choose the current occupancy for this ${singleFamily ? 'home' : 'property'}.`;
+    if (propertyCanRent && occupancyStatus === 'rented') {
       if (renter.source === 'existing' && !renter.contact_id) next.renter_contact = 'Select an existing renter.';
       if (renter.source === 'new' && !renter.name.trim()) next.renter_contact = 'Renter name is required.';
       if (renter.source === 'new' && !renter.email.trim() && !renter.phone.trim()) next.renter_contact = 'Add an email or phone number.';
@@ -1020,7 +1022,7 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
       }
     }
     return next;
-  }, [form, subtype, singleFamily, multifamily, apartment, unitMappedProperty, commercial, industrial, officeBuilding, officeInBuilding, officeFloor, retailCenter, hospitalitySpace, commercialSpaceType, mixedUse, mixedUseOwnershipMode, mixedUseComponents, mixedUseFloorPlan, property, existingUnits, propertyCanRent, roomCount, floorCount, floorCapacities, owners, unitOwnerAssignments, rented, renter, pendingUnits, industrialBuildingSubtype, warehouse, distributionCenter, manufacturingPlant, researchFacility, propertyFacilities, customFacilities]);
+  }, [form, subtype, singleFamily, multifamily, apartment, unitMappedProperty, commercial, industrial, officeBuilding, officeInBuilding, officeFloor, retailCenter, hospitalitySpace, commercialSpaceType, mixedUse, mixedUseOwnershipMode, mixedUseComponents, mixedUseFloorPlan, property, existingUnits, propertyCanRent, roomCount, floorCount, floorCapacities, owners, unitOwnerAssignments, occupancyStatus, renter, pendingUnits, industrialBuildingSubtype, warehouse, distributionCenter, manufacturingPlant, researchFacility, propertyFacilities, customFacilities]);
 
   const continueStep = () => {
     if (hasPropertyStepErrors(validation, step)) {
@@ -1086,17 +1088,19 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
     : renter.name;
   const occupancySummary = !propertyCanRent
     ? 'Not applicable'
-    : rented === false
-      ? 'Not rented'
-      : rented
-        ? [
-          renterName.trim() || 'Renter not set',
-          renter.monthly_rent ? `$${renter.monthly_rent} / month` : 'Rent not set',
-          renter.lease_term_type === 'fixed'
-            ? [renter.lease_start_date, renter.lease_end_date].filter(Boolean).join(' – ') || 'Lease dates not set'
-            : 'Until termination',
-        ].join(' · ')
-        : 'Not decided';
+    : occupancyStatus === 'owner_occupied'
+      ? 'Occupied by owner'
+      : occupancyStatus === 'vacant'
+        ? 'Not rented'
+        : occupancyStatus === 'rented'
+          ? [
+            renterName.trim() || 'Renter not set',
+            renter.monthly_rent ? `$${renter.monthly_rent} / month` : 'Rent not set',
+            renter.lease_term_type === 'fixed'
+              ? [renter.lease_start_date, renter.lease_end_date].filter(Boolean).join(' – ') || 'Lease dates not set'
+              : 'Until termination',
+          ].join(' · ')
+          : 'Not decided';
   const unitRecordsSummary = mixedUse
     ? `${inlineUnitRecords.length} of ${mixedUsePlannedSpaces} planned spaces added`
     : unitMappedProperty
@@ -1143,11 +1147,12 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
       production_inputs: manufacturingPlant ? form.production_inputs ?? [] : [],
       research_focus: researchFacility ? form.research_focus ?? [] : [],
       research_inputs: researchFacility ? form.research_inputs ?? [] : [],
-      is_rented: propertyCanRent ? Boolean(rented) : false,
-      monthly_rent: propertyCanRent && rented ? Number(renter.monthly_rent) : null,
-      lease_term_type: propertyCanRent && rented ? renter.lease_term_type : null,
-      lease_start_date: propertyCanRent && rented ? renter.lease_start_date : null,
-      lease_end_date: propertyCanRent && rented && renter.lease_term_type === 'fixed' ? renter.lease_end_date : null,
+      is_rented: propertyCanRent ? occupancyStatus === 'rented' : false,
+      occupancy_status: propertyCanRent ? occupancyStatus ?? 'vacant' : 'vacant',
+      monthly_rent: propertyCanRent && occupancyStatus === 'rented' ? Number(renter.monthly_rent) : null,
+      lease_term_type: propertyCanRent && occupancyStatus === 'rented' ? renter.lease_term_type : null,
+      lease_start_date: propertyCanRent && occupancyStatus === 'rented' ? renter.lease_start_date : null,
+      lease_end_date: propertyCanRent && occupancyStatus === 'rented' && renter.lease_term_type === 'fixed' ? renter.lease_end_date : null,
     } as PropertyDraft;
     const ownerRows = singleFamily || unitMappedProperty || commercial || industrial || mixedUse ? owners.map((owner, index) => ({
       ...owner,
@@ -1163,7 +1168,7 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
          ? MIXED_USE_SPACE_MAPPING_SCOPE
         : apartment && owners.length > 1 ? owner.ownership_scope.trim() : '',
     })) : [];
-    const renterRow = propertyCanRent && rented ? {
+    const renterRow = propertyCanRent && occupancyStatus === 'rented' ? {
       ...renter,
       name: renter.name.trim(),
       email: renter.email.trim(),
@@ -1517,12 +1522,16 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
 
                     {step === 4 && propertyCanRent && (
                       <section data-testid="section-property-rental">
-                        <SectionHeading index="04" eyebrow="Occupancy" title={`Is this ${singleFamily ? 'home' : 'property'} rented?`} description={`Add the current renter and lease details, or leave the ${singleFamily ? 'home' : 'property'} unoccupied.`} />
-                        <div className="grid grid-cols-2 gap-2" role="group" aria-label="Rental status">
-                          {[{ value: false, title: 'Not rented', copy: 'No active renter' }, { value: true, title: 'Rented', copy: 'Add renter & lease' }].map((choice) => <button key={String(choice.value)} type="button" data-testid={`button-property-rented-${choice.value ? 'yes' : 'no'}`} aria-pressed={rented === choice.value} onClick={() => setRented(choice.value)} className={`rounded-[10px] border p-3 text-left transition-colors ${rented === choice.value ? 'border-[#97ad9b] bg-[#eff4ee]' : 'border-[#e7e4de] bg-white hover:border-[#d1d7cd]'}`}><span className="block text-[12px] font-semibold text-[#45443d]">{choice.title}</span><span className="mt-1 block text-[10px] text-[#949087]">{choice.copy}</span></button>)}
+                        <SectionHeading index="04" eyebrow="Occupancy" title={`How is this ${singleFamily ? 'home' : 'property'} occupied?`} description="Choose whether it is rented, occupied by its owner, or vacant." />
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="Property occupancy">
+                          {[
+                            { value: 'rented' as const, title: 'Rented', copy: 'Add renter & lease', testId: 'yes' },
+                            { value: 'owner_occupied' as const, title: 'Occupied by owner', copy: 'The owner lives or works here', testId: 'owner' },
+                            { value: 'vacant' as const, title: 'Not rented', copy: 'No active renter', testId: 'no' },
+                          ].map((choice) => <button key={choice.value} type="button" data-testid={`button-property-rented-${choice.testId}`} aria-pressed={occupancyStatus === choice.value} onClick={() => setOccupancyStatus(choice.value)} className={`rounded-[10px] border p-3 text-left transition-colors ${occupancyStatus === choice.value ? 'border-[#97ad9b] bg-[#eff4ee]' : 'border-[#e7e4de] bg-white hover:border-[#d1d7cd]'}`}><span className="block text-[12px] font-semibold text-[#45443d]">{choice.title}</span><span className="mt-1 block text-[10px] text-[#949087]">{choice.copy}</span></button>)}
                         </div>
                         <FormError message={validation.rented} testId="error-property-rented" />
-                        {rented && <div data-testid="section-property-renter" className="mt-3 rounded-[12px] border border-[#e7e4de] bg-white p-3.5 sm:p-4">
+                        {occupancyStatus === 'rented' && <div data-testid="section-property-renter" className="mt-3 rounded-[12px] border border-[#e7e4de] bg-white p-3.5 sm:p-4">
                           <ContactFields row={renter} index={0} kind="renter" contacts={contacts} onChange={(patch) => setRenterFields(patch as Partial<PropertyRenterDraft>)} />
                           <FormError message={validation.renter_contact} testId="error-property-renter-contact" />
                           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">

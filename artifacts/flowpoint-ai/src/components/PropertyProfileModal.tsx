@@ -18,6 +18,7 @@ import {
   propertyAddress,
   propertyCategoryLabel,
   propertyTypeLabel,
+  occupancyStatusLabel,
   RESEARCH_FACILITY_FACILITIES,
   RETAIL_CENTER_FACILITIES,
   RETAIL_CENTER_TYPES,
@@ -70,17 +71,25 @@ interface PropertyProfileModalProps {
 
 export default function PropertyProfileModal({ property, contacts, ownerships, units, onClose, onEdit, onDelete }: PropertyProfileModalProps) {
   const propertyUnits = units.filter((unit) => unit.property_id === property.id);
-  const isSingleHome = property.property_type === 'single_family_home';
   const isMixedUse = property.property_type === 'mixed_use_development';
   const hasUnitRecords = property.property_type === 'multifamily_units'
     || property.property_type === 'apartment_building'
     || isMixedUse;
-  const propertyLevelRental = isSingleHome || ['office_building', 'retail_center', 'restaurant_hospitality'].includes(property.property_type ?? '');
+  const propertyLevelRental = supportsPropertyRental(property.property_type);
   const totalUnits = isMixedUse
     ? (property.mixed_use_floor_plan ?? []).reduce((total, floor) => total + Object.values(floor).reduce((sum, value) => sum + Number(value || 0), 0), 0)
     : property.units_count;
-  const occupiedUnits = propertyLevelRental ? Number(Boolean(property.is_rented)) : propertyUnits.filter((unit) => unit.status === 'occupied').length;
-  const vacantUnits = propertyLevelRental ? Number(!property.is_rented) : propertyUnits.filter((unit) => unit.status === 'vacant').length;
+  const propertyOccupancy = property.occupancy_status ?? (property.is_rented ? 'rented' : 'vacant');
+  const unitOccupancy = (unit: Unit) => unit.occupancy_status ?? (unit.status === 'occupied' ? 'rented' : 'vacant');
+  const ownerOccupiedUnits = propertyLevelRental
+    ? Number(propertyOccupancy === 'owner_occupied')
+    : propertyUnits.filter((unit) => unitOccupancy(unit) === 'owner_occupied').length;
+  const vacantUnits = propertyLevelRental
+    ? Number(propertyOccupancy === 'vacant')
+    : propertyUnits.filter((unit) => unitOccupancy(unit) === 'vacant').length;
+  const rentedUnits = propertyLevelRental
+    ? Number(propertyOccupancy === 'rented')
+    : propertyUnits.filter((unit) => unitOccupancy(unit) === 'rented').length;
   const propertyRenter = ownerships.find((relationship) => relationship.property_id === property.id && !relationship.unit_id && relationship.relationship_type === 'tenant');
   const renterName = contacts.find((contact) => String(contact.id) === String(propertyRenter?.contact_id))?.name;
   const commercialSpaceType = [...RETAIL_CENTER_TYPES, ...HOSPITALITY_SPACE_TYPES].find((item) => item.value === property.commercial_space_type)?.label;
@@ -175,7 +184,8 @@ export default function PropertyProfileModal({ property, contacts, ownerships, u
                  <div className="mb-3 flex items-center justify-between"><div><h3 className="text-[13px] font-semibold text-[#302d28]">Units</h3><p className="mt-1 text-[11px] text-[#9a958d]">Manage units from the property card.</p></div><Zap size={16} className="text-[#aaa59d]" /></div>
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
                   <div className="flex items-center justify-between rounded-[9px] bg-[#faf9f7] px-3 py-2.5"><span className="text-[11px] text-[#77736d]">{isMixedUse ? 'Planned spaces' : 'Total units'}</span><span className="text-[11px] font-medium text-[#37342f]">{totalUnits ?? '—'}</span></div>
-                  <div className="flex items-center justify-between rounded-[9px] bg-[#faf9f7] px-3 py-2.5"><span className="text-[11px] text-[#77736d]">Rented</span><span className="text-[11px] font-medium text-[#37342f]">{occupiedUnits}</span></div>
+                  <div className="flex items-center justify-between rounded-[9px] bg-[#faf9f7] px-3 py-2.5"><span className="text-[11px] text-[#77736d]">Rented</span><span className="text-[11px] font-medium text-[#37342f]">{rentedUnits}</span></div>
+                  <div className="flex items-center justify-between rounded-[9px] bg-[#faf9f7] px-3 py-2.5"><span className="text-[11px] text-[#77736d]">Occupied by owner</span><span className="text-[11px] font-medium text-[#37342f]">{ownerOccupiedUnits}</span></div>
                   <div className="flex items-center justify-between rounded-[9px] bg-[#faf9f7] px-3 py-2.5"><span className="text-[11px] text-[#77736d]">Not rented</span><span className="text-[11px] font-medium text-[#37342f]">{vacantUnits}</span></div>
                   <div className="flex items-center justify-between rounded-[9px] bg-[#faf9f7] px-3 py-2.5"><span className="text-[11px] text-[#77736d]">Units recorded</span><span className="text-[11px] font-medium text-[#37342f]">{propertyUnits.length}</span></div>
                 </div>
@@ -196,9 +206,9 @@ export default function PropertyProfileModal({ property, contacts, ownerships, u
               ) : <p className="rounded-[10px] border border-dashed border-[#dedad3] bg-[#faf9f7] px-3.5 py-3 text-[10px] text-[#969188]">No facilities selected.</p>}
             </section>
             {supportsPropertyRental(property.property_type) && <section className="mt-4 rounded-[14px] border border-[#e9e6e1] bg-white p-5">
-              <div className="mb-3"><h3 className="text-[13px] font-semibold text-[#302d28]">Occupancy & lease</h3><p className="mt-1 text-[11px] text-[#9a958d]">Rental information entered for this property.</p></div>
+              <div className="mb-3"><h3 className="text-[13px] font-semibold text-[#302d28]">Occupancy & lease</h3><p className="mt-1 text-[11px] text-[#9a958d]">Occupancy and rental information entered for this property.</p></div>
               <div className="grid gap-x-7 sm:grid-cols-2">
-                <InfoRow label="Rental status" value={property.is_rented ? 'Rented' : 'Not rented'} />
+                <InfoRow label="Occupancy status" value={occupancyStatusLabel(propertyOccupancy)} />
                 <InfoRow label="Renter" value={property.is_rented ? renterName : null} />
                 <InfoRow label="Monthly rent" value={property.is_rented ? property.monthly_rent : null} />
                 <InfoRow label="Lease duration" value={property.is_rented ? property.lease_term_type === 'until_termination' ? 'Until termination' : property.lease_term_type === 'fixed' ? 'Fixed term' : null : null} />

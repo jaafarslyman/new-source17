@@ -22,6 +22,7 @@ import {
   propertyCategoryLabel,
   propertyStatusLabel,
   propertyTypeLabel,
+  occupancyStatusLabel,
   MIXED_USE_SPACE_MAPPING_SCOPE,
   supportsPropertyRental,
   validateUnitOwnershipMap,
@@ -166,12 +167,17 @@ function PropertyCard({
   const propertyUnits = units.filter((unit) => unit.property_id === property.id);
   const mixedUse = property.property_type === 'mixed_use_development';
   const propertyLevelRental = supportsPropertyRental(property.property_type);
+  const propertyOccupancy = property.occupancy_status ?? (property.is_rented ? 'rented' : 'vacant');
+  const unitOccupancy = (unit: Unit) => unit.occupancy_status ?? (unit.status === 'occupied' ? 'rented' : 'vacant');
   const rented = propertyLevelRental
-    ? Number(Boolean(property.is_rented))
-    : propertyUnits.filter((unit) => unit.status === 'occupied').length;
+    ? Number(propertyOccupancy === 'rented')
+    : propertyUnits.filter((unit) => unitOccupancy(unit) === 'rented').length;
   const notRented = propertyLevelRental
-    ? Number(!property.is_rented)
-    : propertyUnits.filter((unit) => unit.status === 'vacant').length;
+    ? Number(propertyOccupancy === 'vacant')
+    : propertyUnits.filter((unit) => unitOccupancy(unit) === 'vacant').length;
+  const ownerOccupied = propertyLevelRental
+    ? Number(propertyOccupancy === 'owner_occupied')
+    : propertyUnits.filter((unit) => unitOccupancy(unit) === 'owner_occupied').length;
   const ownerCount = new Set(relationships
     .filter((item) => item.property_id === property.id && item.relationship_type === 'owner')
     .map((item) => String(item.contact_id))).size;
@@ -192,6 +198,7 @@ function PropertyCard({
         <div><p className="text-[#aaa59d]">{propertyLevelRental ? 'Rented' : 'Rented units'}</p><p className="mt-0.5 font-semibold text-[#625e57]">{rented}</p></div>
         <div><p className="text-[#aaa59d]">Owners</p><p className="mt-0.5 flex items-center gap-1 font-semibold text-[#625e57]"><Users size={10} />{ownerCount}</p></div>
       </div>
+      {ownerOccupied > 0 && <p data-testid={`text-property-owner-occupied-${property.id}`} className="mt-2 text-[9px] text-[#526d5b]">{propertyLevelRental ? occupancyStatusLabel('owner_occupied') : `${ownerOccupied} occupied by owner`}</p>}
       {notRented > 0 && <p data-testid={`text-property-not-rented-${property.id}`} className="mt-2 text-[9px] text-[#939087]">{notRented} not rented</p>}
       <PropertyUnitManager property={property} units={units} contacts={contacts} relationships={relationships} onSave={onUnitSave} onDelete={onUnitDelete} />
     </div>

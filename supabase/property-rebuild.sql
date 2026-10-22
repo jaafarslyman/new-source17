@@ -47,6 +47,8 @@ create table if not exists public.properties (
   custom_facilities text[] not null default '{}',
 
   is_rented boolean not null default false,
+  occupancy_status text not null default 'vacant'
+    check (occupancy_status in ('rented', 'owner_occupied', 'vacant')),
   monthly_rent numeric(12, 2),
   lease_term_type text,
   lease_start_date date,
@@ -135,6 +137,7 @@ alter table public.properties
   add column if not exists facilities text[] not null default '{}',
   add column if not exists custom_facilities text[] not null default '{}',
   add column if not exists is_rented boolean not null default false,
+  add column if not exists occupancy_status text not null default 'vacant',
   add column if not exists monthly_rent numeric(12, 2),
   add column if not exists lease_term_type text,
   add column if not exists lease_start_date date,
@@ -157,7 +160,8 @@ alter table public.properties
   drop constraint if exists properties_category_type_check,
   drop constraint if exists properties_structure_check,
   drop constraint if exists properties_units_count_check,
-  drop constraint if exists properties_rental_details_check;
+  drop constraint if exists properties_rental_details_check,
+  drop constraint if exists properties_occupancy_status_check;
 
 create or replace function public.property_integer_array_sum(input_values integer[])
 returns bigint
@@ -261,6 +265,16 @@ alter table public.properties
       )
     );
 
+alter table public.properties
+  add constraint properties_occupancy_status_check
+    check (
+      occupancy_status in ('rented', 'owner_occupied', 'vacant')
+      and (
+        (occupancy_status = 'rented' and is_rented)
+        or (occupancy_status in ('owner_occupied', 'vacant') and not is_rented)
+      )
+    );
+
 create index if not exists properties_company_id_idx on public.properties (company_id);
 create index if not exists properties_company_status_idx on public.properties (company_id, status);
 create index if not exists properties_company_type_idx on public.properties (company_id, property_type);
@@ -293,6 +307,9 @@ create table public.units (
   status text not null default 'vacant' check (
     status in ('occupied', 'vacant', 'maintenance', 'unavailable')
   ),
+  occupancy_status text not null default 'vacant' check (
+    occupancy_status in ('rented', 'owner_occupied', 'vacant')
+  ),
 
   amenities text,
   facilities text[] not null default '{}',
@@ -305,15 +322,8 @@ create table public.units (
 
   constraint units_rental_details_check check (
     (
-      status <> 'occupied'
-      and monthly_rent is null
-      and lease_term_type is null
-      and lease_start_date is null
-      and lease_end_date is null
-    )
-    or
-    (
-      status = 'occupied'
+      occupancy_status = 'rented'
+      and status = 'occupied'
       and monthly_rent is not null and monthly_rent > 0
       and lease_start_date is not null
       and (
@@ -321,6 +331,24 @@ create table public.units (
         or
         (lease_term_type = 'until_termination' and lease_end_date is null)
       )
+    )
+    or
+    (
+      occupancy_status = 'owner_occupied'
+      and status = 'occupied'
+      and monthly_rent is null
+      and lease_term_type is null
+      and lease_start_date is null
+      and lease_end_date is null
+    )
+    or
+    (
+      occupancy_status = 'vacant'
+      and status in ('vacant', 'maintenance', 'unavailable')
+      and monthly_rent is null
+      and lease_term_type is null
+      and lease_start_date is null
+      and lease_end_date is null
     )
   )
 );

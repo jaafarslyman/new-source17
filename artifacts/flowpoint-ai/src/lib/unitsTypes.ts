@@ -1,3 +1,5 @@
+import type { OccupancyStatus } from '@/lib/propertiesTypes';
+
 export interface Unit {
   id: string;
   company_id: string | null;
@@ -21,6 +23,7 @@ export interface Unit {
   lease_end_date: string | null;
   lease_term_type: 'fixed' | 'until_termination' | null;
   status: string | null;
+  occupancy_status: OccupancyStatus | null;
   amenities: string | null;
   facilities: string[] | null;
   custom_facilities: string[] | null;
@@ -80,6 +83,7 @@ export const blankUnit: UnitDraft = {
   lease_end_date: null,
   lease_term_type: null,
   status: 'vacant',
+  occupancy_status: 'vacant',
   amenities: '',
   facilities: [],
   custom_facilities: [],

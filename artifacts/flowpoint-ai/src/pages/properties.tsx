@@ -22,7 +22,7 @@ import {
   propertyCategoryLabel,
   propertyStatusLabel,
   propertyTypeLabel,
-  mixedUseOwnershipScopeValues,
+  MIXED_USE_SPACE_MAPPING_SCOPE,
   supportsPropertyRental,
   validateUnitOwnershipMap,
   type Property,
@@ -93,15 +93,48 @@ function contactFitsOwnerKind(contact: Contact, entityType: 'individual' | 'comp
   return entityType === 'company' ? contact.contact_type === 'company' : contact.contact_type !== 'company';
 }
 
-function validateMixedUseOwnerScopes(ownerDrafts: PropertyOwnerDraft[], components: string[]) {
+function validOwnershipShare(value: string) {
+  if (!/^(?:\d+(?:\.\d{1,2})?|\.\d{1,2})$/.test(value.trim())) return false;
+  const share = Number(value);
+  return Number.isFinite(share) && share > 0 && share <= 100;
+}
+
+function validateMixedUseOwnership(ownerDrafts: PropertyOwnerDraft[], inlineUnits: UnitSavePayload[]) {
   if (!ownerDrafts.length) return 'Add at least one owner.';
-  if (ownerDrafts.length === 1) return null;
-  const validComponents = new Set(components);
-  const ownerScopes = ownerDrafts.map((owner) => mixedUseOwnershipScopeValues(owner.ownership_scope)
-    .filter((component) => validComponents.has(component)));
-  if (ownerScopes.some((scope) => !scope.length)) return 'Choose at least one included use for every owner.';
-  const unassigned = components.filter((component) => !ownerScopes.some((scope) => scope.includes(component)));
-  return unassigned.length ? `Assign every included use to an owner: ${unassigned.join(', ')}.` : null;
+  const mappedBySpace = ownerDrafts.some((owner) => owner.ownership_scope === MIXED_USE_SPACE_MAPPING_SCOPE);
+  if (mappedBySpace) {
+    if (ownerDrafts.length < 2 || ownerDrafts.some((owner) => owner.ownership_scope !== MIXED_USE_SPACE_MAPPING_SCOPE)) {
+      return 'Choose one ownership method for all mixed-use property owners.';
+    }
+    const propertyOwnerReferences = new Set(ownerDrafts.map((owner, index) => owner.source === 'new'
+      ? String(owner.temp_contact_id ?? -(index + 1))
+      : String(owner.contact_id)));
+    for (const space of inlineUnits) {
+      const spaceOwnerReferences = space.owners.map((owner, index) => owner.source === 'new'
+        ? String(owner.temp_contact_id ?? -(index + 1))
+        : String(owner.contact_id));
+      if (!spaceOwnerReferences.length || spaceOwnerReferences.some((reference) => !propertyOwnerReferences.has(reference))) {
+        return 'Assign current property owners to every space.';
+      }
+      if (new Set(spaceOwnerReferences).size !== spaceOwnerReferences.length) {
+        return 'Each owner can only be assigned once to a space.';
+      }
+      if (space.owners.length > 1) {
+        const shares = space.owners.map((owner) => owner.ownership_percentage);
+        if (shares.some((share) => !validOwnershipShare(share))) {
+          return 'Enter a valid share for every owner of a shared space.';
+        }
+        const total = shares.reduce((sum, share) => sum + Number(share), 0);
+        if (Math.abs(total - 100) > 0.001) return 'Ownership shares for each shared space must total 100%.';
+      }
+    }
+    return null;
+  }
+  if (ownerDrafts.some((owner) => !validOwnershipShare(owner.ownership_percentage))) {
+    return 'Enter a valid ownership percentage for every owner.';
+  }
+  const total = ownerDrafts.reduce((sum, owner) => sum + Number(owner.ownership_percentage), 0);
+  return Math.abs(total - 100) > 0.001 ? `Ownership percentages must total 100% (currently ${Number(total.toFixed(2))}%).` : null;
 }
 
 function StatusPill({ status }: { status: string | null }) {
@@ -346,8 +379,8 @@ export default function PropertiesPage() {
       if (mapError) throw new Error(mapError);
     }
     if (draft.property_type === 'mixed_use_development') {
-      const scopeError = validateMixedUseOwnerScopes(ownerDrafts, draft.mixed_use_components ?? []);
-      if (scopeError) throw new Error(scopeError);
+      const ownershipError = validateMixedUseOwnership(ownerDrafts, inlineUnits);
+      if (ownershipError) throw new Error(ownershipError);
     }
     const duplicateOwner = ownerDrafts.filter((owner) => owner.source === 'existing').some((owner, index, list) => list.findIndex((item) => item.contact_id === owner.contact_id) !== index);
     if (duplicateOwner) throw new Error('Each owner can only be added once.');
@@ -449,7 +482,7 @@ export default function PropertiesPage() {
             start_date: null,
             end_date: null,
             notes: null,
-            ownership_percentage: isMixedUseSpace || !owner.ownership_percentage.trim() ? null : Number(owner.ownership_percentage),
+            ownership_percentage: !owner.ownership_percentage.trim() ? null : Number(owner.ownership_percentage),
             ownership_scope: isMixedUseSpace ? 'Entire space' : owner.ownership_scope || null,
           });
         }

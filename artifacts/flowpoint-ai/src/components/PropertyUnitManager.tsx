@@ -14,8 +14,7 @@ import {
   RETAIL_UNIT_FACILITIES,
   RETAIL_UNIT_TYPES,
   WAREHOUSE_FACILITIES,
-  mixedUseOwnershipScopeLabel,
-  mixedUseOwnershipScopeValues,
+  MIXED_USE_SPACE_MAPPING_SCOPE,
   propertyTypeLabel,
   type Property,
 } from '@/lib/propertiesTypes';
@@ -98,6 +97,40 @@ function mixedUseUnitFacilities(unitType: string) {
     { label: 'Warehouse', options: WAREHOUSE_FACILITIES },
   );
   return groupedFacilityOptions({ label: 'Commercial', options: COMMERCIAL_FACILITIES });
+}
+
+function firstAvailableMixedUseSlot(property: Property, units: Unit[], exceptUnitId?: Unit['id']) {
+  for (let floor = 0; floor < (property.floor_count ?? 0); floor += 1) {
+    for (const component of MIXED_USE_COMPONENTS) {
+      if (!property.mixed_use_components?.includes(component.value)) continue;
+      const capacity = Number(property.mixed_use_floor_plan?.[floor]?.[component.value] ?? 0);
+      const assigned = units.filter((item) =>
+        item.id !== exceptUnitId && item.floor === floor && item.unit_type === component.value,
+      ).length;
+      if (assigned < capacity) return { floor, unitType: component.value };
+    }
+  }
+  return null;
+}
+
+function firstAvailableFloorForMixedUseType(property: Property, units: Unit[], unitType: string, exceptUnitId?: Unit['id']) {
+  for (let floor = 0; floor < (property.floor_count ?? 0); floor += 1) {
+    const capacity = Number(property.mixed_use_floor_plan?.[floor]?.[unitType] ?? 0);
+    const assigned = units.filter((item) =>
+      item.id !== exceptUnitId && item.floor === floor && item.unit_type === unitType,
+    ).length;
+    if (assigned < capacity) return floor;
+  }
+  return null;
+}
+
+function firstAvailableApartmentFloor(property: Property, units: Unit[], exceptUnitId?: Unit['id']) {
+  for (let floor = 0; floor < (property.floor_count ?? 0); floor += 1) {
+    const capacity = Number(property.floor_unit_counts?.[floor] ?? 0);
+    const assigned = units.filter((item) => item.id !== exceptUnitId && item.floor === floor).length;
+    if (assigned < capacity) return floor;
+  }
+  return null;
 }
 
 function relationshipRenterDraft(relationship: ContactPropertyRelationship | undefined, contact?: Contact, unit?: Unit | null): PropertyRenterDraft {
@@ -209,8 +242,14 @@ function UnitForm({
   const hasUnitOwnership = unitMappedProperty || mixedUse;
   const existingUnitOwners = relationships.filter((item) => item.unit_id === unit?.id && item.relationship_type === 'owner');
   const propertyOwners = relationships.filter((item) => item.property_id === property.id && item.relationship_type === 'owner' && !item.unit_id);
+  const mixedUseSpaceMapping = mixedUse && propertyOwners.length > 1
+    && propertyOwners.some((owner) => owner.ownership_scope === MIXED_USE_SPACE_MAPPING_SCOPE);
+  const nextMixedUseSlot = mixedUse ? firstAvailableMixedUseSlot(property, units, unit?.id) : null;
   const activeTenant = relationships.find((item) => item.unit_id === unit?.id && item.relationship_type === 'tenant');
-  const initialUnitType = unit?.unit_type ?? (mixedUse ? property.mixed_use_components?.[0] ?? 'apartment' : apartmentBuilding ? 'apartment' : 'house');
+  const initialUnitType = unit?.unit_type ?? (mixedUse ? nextMixedUseSlot?.unitType ?? property.mixed_use_components?.[0] ?? 'apartment' : apartmentBuilding ? 'apartment' : 'house');
+  const initialFloor = unit?.floor ?? (mixedUse
+    ? nextMixedUseSlot?.floor ?? null
+    : apartmentBuilding ? firstAvailableApartmentFloor(property, units) : null);
   const ownerDraftFor = (relationship: ContactPropertyRelationship) => relationshipOwnerDraft(
     relationship,
     contacts.find((contact) => String(contact.id) === String(relationship.contact_id)),
@@ -247,16 +286,13 @@ function UnitForm({
     }
     return [];
   };
-  const propertyOwnersForUse = (unitType: string) => propertyOwners.filter((owner) =>
-    mixedUseOwnershipScopeValues(owner.ownership_scope).includes(unitType),
-  );
   const [draft, setDraft] = useState<UnitDraft>(() => ({
     property_id: property.id,
     unit_number: unit?.unit_number ?? '',
     unit_type: initialUnitType,
     commercial_space_type: unit?.commercial_space_type ?? null,
     description: unit?.description ?? '',
-    floor: unit?.floor ?? null,
+     floor: initialFloor,
     floor_count: unit?.floor_count ?? null,
     room_count: unit?.room_count ?? null,
     bedrooms: unit?.bedrooms ?? null,
@@ -284,11 +320,13 @@ function UnitForm({
       if (mapped.length) return mapped;
     }
     if (!hasUnitOwnership) return [];
-    if (mixedUse && propertyOwners.length === 1) return [ownerDraftFor(propertyOwners[0])];
-    if (existingUnitOwners.length) return existingUnitOwners.map((relationship) =>
-      relationshipOwnerDraft(relationship, contacts.find((contact) => String(contact.id) === String(relationship.contact_id))),
-    );
-    if (mixedUse && propertyOwners.length > 1) return propertyOwnersForUse(initialUnitType).map(ownerDraftFor);
+    if (mixedUse && !mixedUseSpaceMapping && propertyOwners.length) return propertyOwners.map(ownerDraftFor);
+    if (existingUnitOwners.length) return existingUnitOwners
+      .filter((relationship) => !mixedUseSpaceMapping || propertyOwners.some((owner) => String(owner.contact_id) === String(relationship.contact_id)))
+      .map((relationship) =>
+        relationshipOwnerDraft(relationship, contacts.find((contact) => String(contact.id) === String(relationship.contact_id))),
+      );
+    if (mixedUse && mixedUseSpaceMapping && propertyOwners.length) return [];
     return [blankOwner()];
   });
   const [renter, setRenter] = useState<PropertyRenterDraft>(() => relationshipRenterDraft(activeTenant, contacts.find((contact) => String(contact.id) === String(activeTenant?.contact_id)), unit));
@@ -305,21 +343,14 @@ function UnitForm({
   }, [apartmentBuilding, propertyOwners, property.unit_ownership_map, draft.unit_number]);
   const lockedUnitOwners = unitMappedProperty
     ? ownerDraftsForUnit(draft.unit_number)
-    : [];
+    : mixedUse && !mixedUseSpaceMapping ? propertyOwners.map(ownerDraftFor) : [];
   const hasLockedUnitOwners = lockedUnitOwners.length > 0;
   const inheritedContact = contacts.find((contact) => String(contact.id) === String(inheritedOwner?.contact_id));
   const inheritedMixedUseOwner = mixedUse && propertyOwners.length === 1 ? propertyOwners[0] : null;
   const inheritedMixedUseContact = contacts.find((contact) => String(contact.id) === String(inheritedMixedUseOwner?.contact_id));
-  const scopedMixedUseOwners = propertyOwnersForUse(draft.unit_type ?? '');
-  const eligibleMixedUseOwners = scopedMixedUseOwners.length ? scopedMixedUseOwners : propertyOwners;
+  const eligibleMixedUseOwners = propertyOwners;
   const eligibleMixedUseOwnerIds = new Set(eligibleMixedUseOwners.map((owner) => String(owner.contact_id)));
-  const mixedUseOwnerOptions = [
-    ...eligibleMixedUseOwners,
-    ...propertyOwners.filter((owner) =>
-      owners.some((selected) => selected.contact_id === String(owner.contact_id))
-      && !eligibleMixedUseOwnerIds.has(String(owner.contact_id)),
-    ),
-  ];
+  const mixedUseOwnerOptions = propertyOwners;
   const occupiedTotal = units.filter((item) => item.id !== unit?.id).length;
   const duplicateUnit = units.some((item) => item.id !== unit?.id && item.unit_number.trim().toLocaleLowerCase() === draft.unit_number.trim().toLocaleLowerCase());
   const unitFacilityOptions = useMemo(() => {
@@ -359,6 +390,7 @@ function UnitForm({
     setDraft((current) => ({
       ...current,
       unit_type: value,
+      floor: firstAvailableFloorForMixedUseType(property, units, value, unit?.id),
       commercial_space_type: null,
       room_count: value === 'apartment' ? current.room_count : null,
       bedrooms: value === 'apartment' ? current.bedrooms : null,
@@ -367,16 +399,40 @@ function UnitForm({
     }));
     if (propertyOwners.length === 1) {
       setOwners([ownerDraftFor(propertyOwners[0])]);
-    } else if (propertyOwners.length > 1) {
-      setOwners(propertyOwnersForUse(value).map(ownerDraftFor));
+    } else if (propertyOwners.length > 1 && !mixedUseSpaceMapping) {
+      setOwners(propertyOwners.map(ownerDraftFor));
     }
   };
   const changeOwner = (index: number, patch: Partial<PropertyOwnerDraft>) => setOwners((current) => current.map((owner, i) => i === index ? { ...owner, ...patch } : owner));
+  const toggleMixedUseOwner = (contactId: string, owner: ContactPropertyRelationship) => {
+    setOwners((current) => {
+      const selected = current.some((item) => item.contact_id === contactId);
+      const next = selected
+        ? current.filter((item) => item.contact_id !== contactId)
+        : [...current, ownerDraftFor(owner)];
+      return next.length <= 1
+        ? next.map((item) => ({ ...item, ownership_percentage: '' }))
+        : next;
+    });
+  };
   const changeRenter = (patch: Partial<PropertyRenterDraft>) => setRenter((current) => ({ ...current, ...patch }));
-  const floorOptions = Array.from({ length: Math.max(0, property.floor_count ?? 0) }, (_, index) => ({
-    value: String(index),
-    label: `${index === 0 ? 'Ground floor (0)' : `Floor ${index}`}${mixedUse ? ` · ${units.filter((item) => item.floor === index && item.unit_type === draft.unit_type).length}/${Number(property.mixed_use_floor_plan?.[index]?.[draft.unit_type ?? ''] ?? 0)} planned` : ''}`,
-  }));
+  const floorOptions = Array.from({ length: Math.max(0, property.floor_count ?? 0) }, (_, index) => {
+    const assigned = units.filter((item) =>
+      item.id !== unit?.id
+      && item.floor === index
+      && (!mixedUse || item.unit_type === draft.unit_type),
+    ).length;
+    const capacity = mixedUse
+      ? Number(property.mixed_use_floor_plan?.[index]?.[draft.unit_type ?? ''] ?? 0)
+      : Number(property.floor_unit_counts?.[index] ?? 0);
+    const countLabel = mixedUse
+      ? ` · ${assigned}/${capacity} planned`
+      : property.floor_unit_counts?.[index] !== undefined ? ` · ${assigned}/${capacity} units` : '';
+    return {
+      value: String(index),
+      label: `${index === 0 ? 'Ground floor (0)' : `Floor ${index}`}${countLabel}`,
+    };
+  });
   const floorCapacity = draft.floor === null
     ? 0
     : mixedUse
@@ -414,17 +470,27 @@ function UnitForm({
     if (mixedUse && draft.unit_type === 'apartment' && (!Number.isInteger(draft.room_count) || draft.room_count === null || draft.room_count < 1)) next.room_count = 'Enter a whole-number room count greater than 0.';
     if (mixedUse && ['retail_store', 'restaurant_hospitality'].includes(draft.unit_type ?? '') && !draft.commercial_space_type) next.commercial_space_type = 'Choose a space type.';
     if (!unit && !mixedUse && occupiedTotal >= (property.units_count ?? 0)) next.limit = 'This property already has its configured number of units.';
-    if (apartmentBuilding && draft.floor !== null && unitsOnFloor >= floorCapacity) next.floor = `This floor already has its limit of ${floorCapacity} units.`;
+    if (apartmentBuilding && draft.floor !== null && unitsOnFloor >= floorCapacity) next.floor = `This floor already has its limit of ${floorCapacity} units. Choose another floor or update its planned capacity.`;
     if (hasUnitOwnership) {
       if (unitMappedProperty) {
         if (!hasLockedUnitOwners) next.owners = propertyOwners.length
           ? 'Map this unit to its property owner in the property setup form before adding or editing it.'
           : 'Add the property owner and map this unit in the property setup form first.';
       } else if (!owners.length) next.owners = 'Add at least one owner.';
-      else if (mixedUse && propertyOwners.length) {
+      else if (mixedUse && mixedUseSpaceMapping && propertyOwners.length) {
         const allowedOwnerIds = new Set(eligibleMixedUseOwners.map((owner) => String(owner.contact_id)));
         if (owners.some((owner) => !owner.contact_id || !allowedOwnerIds.has(owner.contact_id))) {
-          next.owners = 'Choose owners whose assigned uses include this space type.';
+          next.owners = 'Choose owners already assigned to this property.';
+        }
+        const distinctContacts = new Set(owners.map((owner) => owner.contact_id));
+        if (distinctContacts.size !== owners.length) next.owners = 'Each owner can only be added once.';
+        if (owners.length > 1) {
+          const shares = owners.map((owner) => Number(owner.ownership_percentage));
+          if (owners.some((owner) => !owner.ownership_percentage.trim() || !Number.isFinite(Number(owner.ownership_percentage)) || Number(owner.ownership_percentage) <= 0 || Number(owner.ownership_percentage) > 100)) {
+            next.owners = 'Enter a valid share for every owner of this space.';
+          } else if (Math.abs(shares.reduce((sum, share) => sum + share, 0) - 100) > 0.001) {
+            next.owners = 'Shares for this space must total 100%.';
+          }
         }
       } else {
         const distinctContacts = new Set<string>();
@@ -500,7 +566,7 @@ function UnitForm({
       name: owner.name.trim(),
       email: owner.email.trim(),
       phone: owner.phone.trim(),
-      ownership_percentage: mixedUse ? '' : owner.ownership_percentage.trim(),
+       ownership_percentage: owner.ownership_percentage.trim(),
       ownership_scope: mixedUse ? 'Entire space' : unitMappedProperty ? owner.ownership_scope || (owners.length === 1 ? 'Entire unit' : '') : '',
     })) : [];
     const renterRow = rented ? {
@@ -550,7 +616,7 @@ function UnitForm({
         </section>
 
         <section className="border-t border-[#ebe8e2] pt-5" data-testid="section-unit-ownership">
-          <div className="mb-3"><p className="text-[12px] font-semibold text-[#35332e]">Ownership</p><p className="mt-1 text-[10px] text-[#938f86]">{unitMappedProperty ? 'Owners are mapped on the property and are locked to this unit.' : mixedUse ? propertyOwners.length === 1 ? 'This space inherits the sole property owner. No percentage is needed.' : propertyOwners.length > 1 ? 'Assign this space to one or more property owners. Their use scopes can preselect owners; no percentages are used.' : 'Add the owner or owners of this space. No percentages are used.' : 'Unit ownership shares must total 100%.'}</p></div>
+          <div className="mb-3"><p className="text-[12px] font-semibold text-[#35332e]">Ownership</p><p className="mt-1 text-[10px] text-[#938f86]">{unitMappedProperty ? 'Owners are mapped on the property and are locked to this unit.' : mixedUse ? mixedUseSpaceMapping ? 'Assign any property owner to this space. If multiple owners share it, their percentages must total 100%.' : 'Property owners and their property-wide shares are inherited and locked for this space.' : 'Unit ownership shares must total 100%.'}</p></div>
           {hasLockedUnitOwners ? (
             <div data-testid="unit-inherited-owner" className="space-y-2 rounded-[10px] border border-[#dbe5dc] bg-[#f4f7f2] px-3.5 py-3">
               {lockedUnitOwners.map((owner, index) => (
@@ -570,22 +636,27 @@ function UnitForm({
           ) : mixedUse && propertyOwners.length === 1 ? (
             <div data-testid="unit-inherited-owner" className="rounded-[10px] border border-[#dbe5dc] bg-[#f4f7f2] px-3.5 py-3">
               <div className="flex items-center gap-2"><DoorOpen size={14} className="text-[#698373]" /><p className="text-[11px] font-semibold text-[#3f4f43]">{inheritedMixedUseContact?.name ?? 'Property owner'}</p><span className="ml-auto text-[9px] font-semibold uppercase tracking-[.08em] text-[#869087]">Inherited</span></div>
-              <p className="mt-1 text-[10px] text-[#89867e]">This space is assigned to the sole owner, who owns 100% of the property.</p>
+              <p className="mt-1 text-[10px] text-[#89867e]">This space is assigned to the sole property owner.</p>
             </div>
-          ) : mixedUse && propertyOwners.length > 1 ? (
+          ) : mixedUse && propertyOwners.length > 1 && mixedUseSpaceMapping ? (
             <div data-testid="mixed-use-space-owner-selection" className="space-y-2">
               {mixedUseOwnerOptions.map((relationship) => {
                 const contact = contacts.find((item) => String(item.id) === String(relationship.contact_id));
                 const checked = owners.some((owner) => owner.contact_id === String(relationship.contact_id));
-                const ownershipScope = mixedUseOwnershipScopeLabel(relationship.ownership_scope);
-                const eligible = eligibleMixedUseOwnerIds.has(String(relationship.contact_id));
-                return <button key={String(relationship.contact_id)} type="button" data-testid={`checkbox-mixed-use-owner-${relationship.contact_id}`} role="checkbox" aria-checked={checked} onClick={() => setOwners((current) => checked
-                  ? current.filter((owner) => owner.contact_id !== String(relationship.contact_id))
-                  : [...current, ownerDraftFor(relationship)])} className={`flex w-full items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-left ${checked ? 'border-[#b9cabe] bg-[#edf4ee]' : 'border-[#e7e4de] bg-white hover:bg-[#f8faf7]'}`}>
+                return <button key={String(relationship.contact_id)} type="button" data-testid={`checkbox-mixed-use-owner-${relationship.contact_id}`} role="checkbox" aria-checked={checked} onClick={() => toggleMixedUseOwner(String(relationship.contact_id), relationship)} className={`flex w-full items-start gap-2.5 rounded-[9px] border px-3 py-2.5 text-left ${checked ? 'border-[#b9cabe] bg-[#edf4ee]' : 'border-[#e7e4de] bg-white hover:bg-[#f8faf7]'}`}>
                   <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border ${checked ? 'border-[#63816e] bg-[#63816e] text-white' : 'border-[#d5d2ca] bg-white'}`}>{checked && <Check size={10} />}</span>
-                  <span className="min-w-0"><span className="block text-[11px] font-semibold text-[#45443d]">{contact?.name ?? 'Property owner'}</span><span className="mt-0.5 block text-[10px] text-[#89867e]">{eligible ? ownershipScope ? `Assigned uses: ${ownershipScope}` : 'No use scope recorded' : `${ownershipScope || 'Other uses'} · not assigned this use`}</span></span>
+                  <span className="min-w-0"><span className="block text-[11px] font-semibold text-[#45443d]">{contact?.name ?? 'Property owner'}</span><span className="mt-0.5 block text-[10px] text-[#89867e]">Available to own this individual space</span></span>
                 </button>;
               })}
+              {owners.length > 1 && <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {owners.map((owner, index) => {
+                  const contact = contacts.find((item) => String(item.id) === owner.contact_id);
+                  return <Field key={`${owner.contact_id}-${index}`} label={`${(contact?.name ?? owner.name) || `Owner ${index + 1}`} share (%)`} required>
+                    <input data-testid={`input-mixed-use-space-owner-${index}-percentage`} className={inputClass} type="number" min="0.01" max="100" step="0.01" value={owner.ownership_percentage} onChange={(event) => changeOwner(index, { ownership_percentage: event.target.value })} placeholder="e.g. 50" />
+                  </Field>;
+                })}
+              </div>}
+              {owners.length > 1 && <p className="text-[10px] text-[#89867e]">Shares for this space must add up to 100%. A sole selected owner owns the whole space.</p>}
               <FormError message={errors.owners} />
             </div>
           ) : (

@@ -464,6 +464,8 @@ export const MIXED_USE_COMPONENTS = [
   { value: 'warehouse', label: 'Warehouses' },
 ] as const;
 
+export const MIXED_USE_SPACE_MAPPING_SCOPE = 'Mapped by space';
+
 export function mixedUseFloorPlanSummary(
   plan: Record<string, number>[] | null | undefined,
   components: string[] | null | undefined,

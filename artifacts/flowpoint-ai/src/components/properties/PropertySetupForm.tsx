@@ -20,6 +20,7 @@ import {
   MANUFACTURED_PRODUCT_SUGGESTIONS,
   MANUFACTURING_PLANT_FACILITIES,
   MIXED_USE_COMPONENTS,
+  MIXED_USE_SPACE_MAPPING_SCOPE,
   OFFICE_FACILITIES,
   PROPERTY_CATEGORIES,
   PROPERTY_TYPES_BY_CATEGORY,
@@ -34,7 +35,6 @@ import {
   type Property,
   type PropertyDraft,
   WAREHOUSE_FACILITIES,
-  mixedUseOwnershipScopeValues,
   supportsPropertyRental,
 } from '@/lib/propertiesTypes';
 import type { Contact, ContactPropertyRelationship } from '@/lib/contactsTypes';
@@ -379,6 +379,7 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
   const [customFacilities, setCustomFacilities] = useState<string[]>([]);
   const [customFacility, setCustomFacility] = useState('');
   const [owners, setOwners] = useState<OwnerDraft[]>([blankOwner()]);
+  const [mixedUseOwnershipMode, setMixedUseOwnershipMode] = useState<'percentage' | 'space'>('percentage');
   const [unitOwnerAssignments, setUnitOwnerAssignments] = useState<UnitOwnerAssignmentDraft[]>([]);
   const [rented, setRented] = useState<boolean | null>(null);
   const [renter, setRenter] = useState<PropertyRenterDraft>(blankRenter());
@@ -450,7 +451,14 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
     const ownerRows = initialOwners.length
       ? initialOwners.map((owner) => ({ ...owner, entity_type: owner.entity_type ?? 'individual' }))
       : [blankOwner()];
-    setOwners(ownerRows);
+    const savedSpaceMapping = ownerRows.length > 1 && ownerRows.some((owner) => owner.ownership_scope === MIXED_USE_SPACE_MAPPING_SCOPE);
+    setMixedUseOwnershipMode(savedSpaceMapping ? 'space' : 'percentage');
+    setOwners(ownerRows.map((owner) => ({
+      ...owner,
+      ownership_percentage: ownerRows.length === 1 && propertyType === 'mixed_use_development'
+        ? '100'
+        : owner.ownership_percentage,
+    })));
     const savedUnitMap = (property?.unit_ownership_map ?? []).flatMap((allocation) => {
       const ownerIndex = ownerRows.findIndex((owner) =>
         owner.source === 'existing' && String(owner.contact_id) === String(allocation.contact_id),
@@ -691,14 +699,14 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
         notes: null,
         ownership_percentage: unitMappedProperty
           ? owners.length === 1 ? 100 : null
-          : Number(owner.ownership_percentage) || null,
+          : mixedUse && mixedUseOwnershipMode === 'space' ? null : Number(owner.ownership_percentage) || null,
         ownership_scope: unitMappedProperty
           ? owners.length === 1 ? 'Entire property' : summarizeOwnerUnits(ownerAssignmentKey(owner, index)) || null
-          : mixedUse && owners.length > 1 ? owner.ownership_scope || null : null,
+          : mixedUse && owners.length > 1 && mixedUseOwnershipMode === 'space' ? MIXED_USE_SPACE_MAPPING_SCOPE : null,
       });
     });
     return { contacts: [...contacts, ...syntheticContacts], relationships: relations };
-  }, [unitMappedProperty, mixedUse, owners, contacts, previewProperty.id, summarizeOwnerUnits]);
+  }, [unitMappedProperty, mixedUse, mixedUseOwnershipMode, owners, contacts, previewProperty.id, summarizeOwnerUnits]);
   const inlineUnitRecords = useMemo<Unit[]>(() => pendingUnits.map((item, index) => ({
     ...item.draft,
     id: `pending-unit-${index}`,
@@ -777,6 +785,14 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
     setFacilities([]);
     setCustomFacilities([]);
     clearIndustrialFields();
+    setMixedUseOwnershipMode('percentage');
+    if (value === 'mixed_use_development' && owners.length === 1) {
+      setOwners((current) => current.map((owner) => ({
+        ...owner,
+        ownership_percentage: '100',
+        ownership_scope: '',
+      })));
+    }
   };
   const clearIndustrialFields = () => {
     setField('industrial_in_building', null);
@@ -798,12 +814,6 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
       : [...mixedUseComponents, component];
     setMixedUseComponents(nextComponents);
     setMixedUseFloorPlan((current) => resizeMixedUseFloorPlan(current, Number(floorCount), nextComponents));
-    setOwners((current) => current.map((owner) => ({
-      ...owner,
-      ownership_scope: mixedUseOwnershipScopeValues(owner.ownership_scope)
-        .filter((value) => nextComponents.includes(value))
-        .join(','),
-    })));
   };
   const updateMixedUseFloorCount = (value: string) => {
     setFloorCount(value);
@@ -816,12 +826,12 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
       ? { ...floor, [component]: value }
       : floor));
   };
-  const toggleOwnerMixedUseScope = (ownerIndex: number, component: string) => {
-    const selected = mixedUseOwnershipScopeValues(owners[ownerIndex]?.ownership_scope);
-    const next = selected.includes(component)
-      ? selected.filter((value) => value !== component)
-      : [...selected, component];
-    setOwner(ownerIndex, { ownership_scope: next.join(',') });
+  const changeMixedUseOwnershipMode = (mode: 'percentage' | 'space') => {
+    setMixedUseOwnershipMode(mode);
+    setOwners((current) => current.map((owner) => ({
+      ...owner,
+      ownership_scope: mode === 'space' ? MIXED_USE_SPACE_MAPPING_SCOPE : '',
+    })));
   };
 
   const validation = useMemo((): Errors => {
@@ -958,18 +968,21 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
         if (exceedsPlan) next.inline_floor_capacity = 'The spaces already added exceed the planned count for a use on at least one floor.';
       }
       if (pendingUnits.length) {
-        const currentOwnerRefs = owners.map((owner) => owner.source === 'new'
-          ? String(owner.temp_contact_id ?? '')
+        const currentOwnerRefs = owners.map((owner, index) => owner.source === 'new'
+          ? String(owner.temp_contact_id ?? -(index + 1))
           : owner.contact_id);
-        const invalidOwnerAssignment = pendingUnits.some(({ draft: unitDraft, owners: unitOwners }) => {
-          const eligibleOwnerRefs = owners
-            .filter((owner) => owners.length === 1 || mixedUseOwnershipScopeValues(owner.ownership_scope).includes(unitDraft.unit_type ?? ''))
-            .map((owner) => owner.source === 'new' ? String(owner.temp_contact_id ?? '') : owner.contact_id);
-          return !unitOwners.length || unitOwners.some((owner) =>
-            !currentOwnerRefs.includes(owner.contact_id) || !eligibleOwnerRefs.includes(owner.contact_id),
-          );
+        const invalidOwnerAssignment = pendingUnits.some(({ owners: unitOwners }) => {
+          const ownerIds = unitOwners.map((owner) => owner.contact_id);
+          if (!unitOwners.length || ownerIds.some((contactId) => !currentOwnerRefs.includes(contactId))) return true;
+          if (new Set(ownerIds).size !== ownerIds.length) return true;
+          if (mixedUseOwnershipMode === 'space' && unitOwners.length > 1) {
+            const shares = unitOwners.map((owner) => owner.ownership_percentage.trim());
+            const total = shares.reduce((sum, share) => sum + Number(share), 0);
+            return shares.some((share) => !isValidOwnershipShare(share)) || Math.abs(total - 100) > 0.001;
+          }
+          return false;
         });
-        if (invalidOwnerAssignment) next.inline_units = 'A mapped space has no current owner or its owner does not own that use. Remove and re-add the space after updating owner assignments.';
+        if (invalidOwnerAssignment) next.inline_units = 'Assign current property owners to every space. If multiple owners share a space, their shares must total 100%.';
       }
     }
     const ownershipEnabled = singleFamily || unitMappedProperty || commercial || industrial || mixedUse;
@@ -980,23 +993,16 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
         if (owner.source === 'new' && !owner.name.trim()) next[`owner_${index}`] = 'Owner name is required.';
         if (owner.source === 'new' && !owner.email.trim() && !owner.phone.trim()) next[`owner_${index}`] = 'Add an email or phone number.';
         if (owner.source === 'new' && owner.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(owner.email.trim())) next[`owner_${index}`] = 'Enter a valid email address.';
-        if (!unitMappedProperty && !isValidOwnershipShare(owner.ownership_percentage)) {
+        if (!unitMappedProperty && (!mixedUse || mixedUseOwnershipMode === 'percentage') && !isValidOwnershipShare(owner.ownership_percentage)) {
           next[`owner_share_${index}`] = 'Enter a share greater than 0 and no more than 100, with up to 2 decimal places.';
         }
         if (apartment && owners.length > 1 && !unitMappedProperty && !/^\d+(?:\s*[-–—]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–—]\s*\d+)?)*$/.test(owner.ownership_scope.trim())) {
           next[`owner_scope_${index}`] = 'List the units or ranges this owner holds (for example, 1–4, 8).';
         }
-        if (mixedUse && owners.length > 1 && !mixedUseOwnershipScopeValues(owner.ownership_scope).some((value) => mixedUseComponents.includes(value))) {
-          next[`owner_scope_${index}`] = 'Choose at least one included use this owner owns.';
-        }
       });
-      if (!unitMappedProperty && ownerSharesAreValid) {
+      if (!unitMappedProperty && (!mixedUse || mixedUseOwnershipMode === 'percentage') && ownerSharesAreValid) {
         const sum = Number(ownerShareTotal.toFixed(2));
         if (Math.abs(sum - 100) > 0.001) next.owner_total = `Ownership percentages must total 100% (currently ${sum}%).`;
-      }
-      if (mixedUse && owners.length > 1) {
-        const unassignedUses = mixedUseComponents.filter((component) => !owners.some((owner) => mixedUseOwnershipScopeValues(owner.ownership_scope).includes(component)));
-        if (unassignedUses.length) next.owner_total = 'Assign every included use to at least one owner.';
       }
     }
     if (propertyCanRent && rented === null) next.rented = `Choose whether this ${singleFamily ? 'home' : 'property'} is rented.`;
@@ -1014,7 +1020,7 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
       }
     }
     return next;
-  }, [form, subtype, singleFamily, multifamily, apartment, unitMappedProperty, commercial, industrial, officeBuilding, officeInBuilding, officeFloor, retailCenter, hospitalitySpace, commercialSpaceType, mixedUse, mixedUseComponents, mixedUseFloorPlan, property, existingUnits, propertyCanRent, roomCount, floorCount, floorCapacities, owners, unitOwnerAssignments, rented, renter, pendingUnits, industrialBuildingSubtype, warehouse, distributionCenter, manufacturingPlant, researchFacility, propertyFacilities, customFacilities]);
+  }, [form, subtype, singleFamily, multifamily, apartment, unitMappedProperty, commercial, industrial, officeBuilding, officeInBuilding, officeFloor, retailCenter, hospitalitySpace, commercialSpaceType, mixedUse, mixedUseOwnershipMode, mixedUseComponents, mixedUseFloorPlan, property, existingUnits, propertyCanRent, roomCount, floorCount, floorCapacities, owners, unitOwnerAssignments, rented, renter, pendingUnits, industrialBuildingSubtype, warehouse, distributionCenter, manufacturingPlant, researchFacility, propertyFacilities, customFacilities]);
 
   const continueStep = () => {
     if (hasPropertyStepErrors(validation, step)) {
@@ -1059,8 +1065,8 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
       const share = unitMappedProperty
         ? owners.length === 1 ? 'All units' : summarizeOwnerUnits(ownerAssignmentKey(owner, index)) || 'No units assigned'
         : `${owner.ownership_percentage || '—'}%`;
-      const scope = mixedUse && owners.length > 1
-        ? ` · ${MIXED_USE_COMPONENTS.filter((component) => mixedUseOwnershipScopeValues(owner.ownership_scope).includes(component.value)).map((component) => component.label).join(', ') || 'No uses assigned'}`
+       const scope = mixedUse && owners.length > 1
+         ? ` · ${mixedUseOwnershipMode === 'space' ? 'Mapped by space' : 'Property-wide shares'}`
         : '';
       return `${name.trim() || `Owner ${index + 1}`} · ${share}${scope}`;
     }).join('\n')
@@ -1148,13 +1154,13 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
       name: owner.name.trim(),
       email: owner.email.trim(),
       phone: owner.phone.trim(),
-      ownership_percentage: unitMappedProperty
+       ownership_percentage: unitMappedProperty
         ? owners.length === 1 ? '100' : ''
-        : owner.ownership_percentage.trim(),
+         : mixedUse && mixedUseOwnershipMode === 'space' ? '' : owner.ownership_percentage.trim(),
       ownership_scope: unitMappedProperty
         ? owners.length === 1 ? 'Entire property' : summarizeOwnerUnits(ownerAssignmentKey(owner, index))
-        : mixedUse && owners.length > 1
-        ? mixedUseOwnershipScopeValues(owner.ownership_scope).filter((value) => mixedUseComponents.includes(value)).join(',')
+         : mixedUse && owners.length > 1 && mixedUseOwnershipMode === 'space'
+         ? MIXED_USE_SPACE_MAPPING_SCOPE
         : apartment && owners.length > 1 ? owner.ownership_scope.trim() : '',
     })) : [];
     const renterRow = propertyCanRent && rented ? {
@@ -1373,9 +1379,27 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
                               ? 'The sole owner will be assigned to every unit. Add more owners to map different units or shared ownership.'
                               : 'Assign each unit to its owner or owners. Percentages are only needed when a unit is shared.'
                             : mixedUse
-                              ? 'Ownership shares must total 100%. For multiple owners, also assign the uses each owner owns.'
+                              ? owners.length === 1
+                                ? 'The sole owner owns 100% of every space. Add another owner to split shares or map owners by individual space.'
+                                : mixedUseOwnershipMode === 'percentage'
+                                  ? 'These property-wide shares apply to every space in the development.'
+                                  : 'Choose owners for each individual apartment, office, retail, hospitality, or warehouse space.'
                               : 'Add one or more owners. Ownership shares must total 100%.'}
                         />
+                        {mixedUse && owners.length > 1 && <div className="mb-3 rounded-[11px] border border-[#e8e5de] bg-[#f8f7f4] p-3.5" data-testid="section-mixed-use-ownership-mode">
+                          <p className="text-[11px] font-semibold text-[#48463f]">How should ownership be recorded?</p>
+                          <p className="mt-1 text-[10px] leading-4 text-[#89867e]">Use one method for the development: shared property-wide percentages, or owners assigned separately to each space.</p>
+                          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            <button type="button" data-testid="button-mixed-use-ownership-percentage" aria-pressed={mixedUseOwnershipMode === 'percentage'} onClick={() => changeMixedUseOwnershipMode('percentage')} className={`rounded-[9px] border px-3 py-2.5 text-left ${mixedUseOwnershipMode === 'percentage' ? 'border-[#97ad9b] bg-[#eff4ee]' : 'border-[#e7e4de] bg-white hover:bg-[#f8faf7]'}`}>
+                              <span className="block text-[10px] font-semibold text-[#45443d]">Split by percentage</span>
+                              <span className="mt-1 block text-[9px] leading-4 text-[#89867e]">The same owners and shares apply to every space.</span>
+                            </button>
+                            <button type="button" data-testid="button-mixed-use-ownership-by-space" aria-pressed={mixedUseOwnershipMode === 'space'} onClick={() => changeMixedUseOwnershipMode('space')} className={`rounded-[9px] border px-3 py-2.5 text-left ${mixedUseOwnershipMode === 'space' ? 'border-[#97ad9b] bg-[#eff4ee]' : 'border-[#e7e4de] bg-white hover:bg-[#f8faf7]'}`}>
+                              <span className="block text-[10px] font-semibold text-[#45443d]">Map each space</span>
+                              <span className="mt-1 block text-[9px] leading-4 text-[#89867e]">Pick owners for each unit; shared units can have their own percentages.</span>
+                            </button>
+                          </div>
+                        </div>}
                         <div className="space-y-3">
                           {owners.map((owner, index) => {
                             const selectedContact = contacts.find((contact) => String(contact.id) === owner.contact_id);
@@ -1393,18 +1417,20 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
                                     <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#f0f2ec] text-[#7e8a77]"><UserRound size={13} /></span>
                                     <div><p className="text-[12px] font-semibold text-[#37362f]">{owners.length > 1 ? `Owner ${index + 1}` : 'Property owner'}</p><p className="mt-0.5 text-[10px] text-[#969188]">Select a contact or add one</p></div>
                                   </div>
-                                  {owners.length > 1 && <button type="button" data-testid={`button-remove-owner-${index}`} onClick={() => {
-                                    setOwners((current) => current.filter((_, ownerIndex) => ownerIndex !== index));
+                                   {owners.length > 1 && <button type="button" data-testid={`button-remove-owner-${index}`} onClick={() => {
+                                     const remainingOwners = owners.filter((_, ownerIndex) => ownerIndex !== index);
+                                     if (mixedUse && remainingOwners.length === 1) {
+                                       setMixedUseOwnershipMode('percentage');
+                                       setOwners(remainingOwners.map((item) => ({ ...item, ownership_percentage: '100', ownership_scope: '' })));
+                                     } else {
+                                       setOwners(remainingOwners);
+                                     }
                                     setUnitOwnerAssignments((current) => current.filter((assignment) => assignment.owner_key !== ownerKey));
                                   }} aria-label={`Remove owner ${index + 1}`} className="flex h-7 w-7 items-center justify-center rounded-full text-[#938e85] hover:bg-[#fbefed] hover:text-[#a33e34]"><Trash2 size={13} /></button>}
                                 </div>
                                 <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                                   <Field label="Entity type" required><FlowPointSelect testId={`select-owner-${index}-entity-type`} value={owner.entity_type} onChange={(value) => setOwner(index, { entity_type: value as OwnerDraft['entity_type'], contact_id: '', source: 'existing' })} placeholder="Choose entity type" options={[{ value: 'individual', label: 'Individual' }, { value: 'company', label: 'Company' }]} /></Field>
-                                  {!unitMappedProperty && <Field label="Ownership share" required><div className="relative"><input data-testid={`input-owner-${index}-percentage`} className={`${inputClass} pr-8`} type="number" min="0.01" max="100" step="0.01" value={owner.ownership_percentage} onChange={(event) => setOwner(index, { ownership_percentage: event.target.value })} placeholder="e.g. 100" /><span className="pointer-events-none absolute right-3 top-[11px] text-[11px] text-[#929087]">%</span></div></Field>}
-                                  {mixedUse && owners.length > 1 && <div className="sm:col-span-2"><Field label="Uses this owner owns" required hint="Select every included use they own"><div className="grid grid-cols-1 gap-1.5 rounded-[9px] border border-[#e4e2de] bg-white p-2 sm:grid-cols-2">{MIXED_USE_COMPONENTS.filter((component) => mixedUseComponents.includes(component.value)).map((component) => {
-                                    const checked = mixedUseOwnershipScopeValues(owner.ownership_scope).includes(component.value);
-                                    return <button key={component.value} type="button" data-testid={`button-owner-${index}-scope-${component.value}`} aria-pressed={checked} onClick={() => toggleOwnerMixedUseScope(index, component.value)} className={`flex min-h-8 items-center gap-2 rounded-[7px] px-2 text-left text-[10px] ${checked ? 'bg-[#edf4ee] text-[#4d6a59]' : 'text-[#69665f] hover:bg-[#f7f6f2]'}`}><span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border ${checked ? 'border-[#63816e] bg-[#63816e] text-white' : 'border-[#d5d2ca] bg-white'}`}>{checked && <Check size={10} />}</span>{component.label}</button>;
-                                  })}</div></Field></div>}
+                                   {!unitMappedProperty && (!mixedUse || mixedUseOwnershipMode === 'percentage') && <Field label="Ownership share" required><div className="relative"><input data-testid={`input-owner-${index}-percentage`} className={`${inputClass} pr-8`} type="number" min="0.01" max="100" step="0.01" value={mixedUse && owners.length === 1 ? '100' : owner.ownership_percentage} disabled={mixedUse && owners.length === 1} onChange={(event) => setOwner(index, { ownership_percentage: event.target.value })} placeholder="e.g. 100" /><span className="pointer-events-none absolute right-3 top-[11px] text-[11px] text-[#929087]">%</span></div></Field>}
                                 </div>
                                 <div className="mt-3"><ContactFields row={owner} index={index} kind="owner" contacts={contacts} entityType={owner.entity_type} excludedContactIds={otherOwnerContactIds} onChange={(patch) => setOwner(index, patch as Partial<OwnerDraft>)} /></div>
                                 <FormError message={validation[`owner_${index}`] || validation[`owner_share_${index}`] || validation[`owner_scope_${index}`]} testId={`error-property-owner-${index}`} />
@@ -1452,7 +1478,8 @@ export default function PropertySetupForm({ property, contacts, initialOwners, i
                           </div>
                           <FormError message={validation.unit_ownership_map} testId="error-unit-ownership-map" />
                         </div>}
-                        {ownerSharesCanBeSummed && hasEnteredOwnerShare && !unitMappedProperty && (Math.abs(ownerShareTotal - 100) > 0.001 || hasUnenteredOwnerShare) && <div role="status" aria-live="polite" data-testid="notice-owner-share-total" className="mt-3 rounded-[9px] border border-[#ead9b4] bg-[#fff9eb] px-3 py-2 text-[10px] leading-[1.5] text-[#836422]">{ownerShareTotal < 100 ? `Ownership is currently ${formatOwnershipShare(ownerShareTotal)}%. Add another owner for the remaining ${formatOwnershipShare(100 - ownerShareTotal)}%, or adjust the shares so they total 100%.` : ownerShareTotal > 100 ? `Ownership currently totals ${formatOwnershipShare(ownerShareTotal)}%. Reduce the shares so they total 100%.` : 'All 100% is already allocated. Reduce the current shares before assigning another owner.'}</div>}
+                        {ownerSharesCanBeSummed && hasEnteredOwnerShare && !unitMappedProperty && (!mixedUse || mixedUseOwnershipMode === 'percentage') && (Math.abs(ownerShareTotal - 100) > 0.001 || hasUnenteredOwnerShare) && <div role="status" aria-live="polite" data-testid="notice-owner-share-total" className="mt-3 rounded-[9px] border border-[#ead9b4] bg-[#fff9eb] px-3 py-2 text-[10px] leading-[1.5] text-[#836422]">{ownerShareTotal < 100 ? `Ownership is currently ${formatOwnershipShare(ownerShareTotal)}%. Add another owner for the remaining ${formatOwnershipShare(100 - ownerShareTotal)}%, or adjust the shares so they total 100%.` : ownerShareTotal > 100 ? `Ownership currently totals ${formatOwnershipShare(ownerShareTotal)}%. Reduce the shares so they total 100%.` : 'All 100% is already allocated. Reduce the current shares before assigning another owner.'}</div>}
+                        {mixedUse && owners.length > 1 && mixedUseOwnershipMode === 'space' && <p className="mt-3 rounded-[9px] border border-[#dbe5dc] bg-[#f4f7f2] px-3 py-2 text-[10px] leading-4 text-[#586b5c]">Property-level percentages are not used in this mode. At the next step, assign owners to each individual space; if a space is shared, its owners’ shares must total 100%.</p>}
                         {owners.length < 20 && <button type="button" data-testid="button-add-property-owner" onClick={() => setOwners((current) => [...current, blankOwner()])} className="mt-3 flex h-9 items-center gap-2 rounded-[9px] border border-dashed border-[#d8d5ce] px-3 text-[11px] font-semibold text-[#6f6b63] transition-colors hover:border-[#aebcaf] hover:bg-[#f3f6f1] hover:text-[#4f6d58]"><Plus size={13} />Add another owner</button>}
                         <FormError message={validation.owners || validation.owner_total} testId="error-property-owner-total" />
                       </section>

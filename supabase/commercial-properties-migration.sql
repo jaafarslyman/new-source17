@@ -123,7 +123,9 @@ alter table public.properties
         and commercial_space_type is not null
         and commercial_space_type in (
           'shopping_mall', 'strip_mall', 'shopping_center',
-          'outlet_center', 'market_hall', 'other'
+          'outlet_center', 'market_hall', 'neighborhood_center',
+          'community_center', 'power_center', 'lifestyle_center',
+          'open_air_center', 'specialty_center', 'retail_park', 'other'
         )
         and cardinality(mixed_use_components) = 0
       )

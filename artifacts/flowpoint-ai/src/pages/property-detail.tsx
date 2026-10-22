@@ -350,7 +350,7 @@ export default function PropertyDetailPage() {
           start_date: null,
           end_date: null,
           notes: null,
-          ownership_percentage: isMixedUseSpace || !owner.ownership_percentage.trim()
+          ownership_percentage: !owner.ownership_percentage.trim()
             ? null
             : Number(owner.ownership_percentage),
           ownership_scope: isMixedUseSpace ? 'Entire space' : owner.ownership_scope || null,
